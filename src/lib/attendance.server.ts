@@ -105,22 +105,32 @@ export async function verifyAndMark(
   }
 
   const name = fullName.trim().replace(/\s+/g, " ");
-  const { error } = await supabaseAdmin.from("attendance_records").upsert(
-    {
-      session_id: session.id,
-      student_id: userId,
-      full_name: name,
-      lat,
-      lng,
-      distance_m: distance,
-      accuracy_m: typeof accuracy === "number" ? accuracy : null,
-      marked_at: new Date().toISOString(),
-    },
-    { onConflict: "session_id,full_name" },
-  );
+  const payload = {
+    session_id: session.id,
+    student_id: userId,
+    full_name: name,
+    lat,
+    lng,
+    distance_m: distance,
+    accuracy_m: typeof accuracy === "number" ? accuracy : null,
+    marked_at: new Date().toISOString(),
+  };
+
+  const { data: existing } = await supabaseAdmin
+    .from("attendance_records")
+    .select("id")
+    .eq("session_id", session.id)
+    .ilike("full_name", name)
+    .maybeSingle();
+
+  if (existing) {
+    return { ok: true as const, distance, session, already: true as const };
+  }
+
+  const { error } = await supabaseAdmin.from("attendance_records").insert(payload);
   if (error) return { ok: false as const, reason: "Could not save attendance. Try again." };
 
-  return { ok: true as const, distance, session };
+  return { ok: true as const, distance, session, already: false as const };
 }
 
 export type ReportRow = {
