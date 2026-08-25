@@ -15,6 +15,8 @@ export function useGeolocation(enabled: boolean) {
   const [attempt, setAttempt] = useState(0);
   const watchId = useRef<number | null>(null);
   const lastFix = useRef<number>(0);
+  const coordsRef = useRef<Coords | null>(null);
+  coordsRef.current = coords;
 
   const retry = useCallback(() => {
     setError(null);
@@ -102,9 +104,6 @@ export function useGeolocation(enabled: boolean) {
       watchId.current = null;
     };
   }, [enabled, attempt]);
-
-  const coordsRef = useRef<Coords | null>(null);
-  coordsRef.current = coords;
 
   const weak = !!coords && coords.accuracy > WEAK_ACCURACY_M;
 
