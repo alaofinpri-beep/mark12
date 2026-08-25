@@ -72,7 +72,9 @@ export type Database = {
       }
       attendance_records: {
         Row: {
+          accuracy_m: number | null
           distance_m: number | null
+          full_name: string
           id: string
           lat: number | null
           lng: number | null
@@ -81,7 +83,9 @@ export type Database = {
           student_id: string
         }
         Insert: {
+          accuracy_m?: number | null
           distance_m?: number | null
+          full_name: string
           id?: string
           lat?: number | null
           lng?: number | null
@@ -90,7 +94,9 @@ export type Database = {
           student_id: string
         }
         Update: {
+          accuracy_m?: number | null
           distance_m?: number | null
+          full_name?: string
           id?: string
           lat?: number | null
           lng?: number | null

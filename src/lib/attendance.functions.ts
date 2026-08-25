@@ -107,17 +107,27 @@ export const updateSessionSettings = createServerFn({ method: "POST" })
 
 export const markAttendance = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d: { code: string; lat: number; lng: number }) =>
-    z
-      .object({
-        code: z.string().trim().min(4).max(12),
-        lat: z.number().min(-90).max(90),
-        lng: z.number().min(-180).max(180),
-      })
-      .parse(d),
+  .inputValidator(
+    (d: { fullName: string; code: string; lat: number; lng: number; accuracy?: number }) =>
+      z
+        .object({
+          fullName: z.string().trim().min(3).max(80),
+          code: z.string().trim().min(4).max(12),
+          lat: z.number().min(-90).max(90),
+          lng: z.number().min(-180).max(180),
+          accuracy: z.number().min(0).max(100000).optional(),
+        })
+        .parse(d),
   )
   .handler(async ({ data, context }) =>
-    verifyAndMark(context.userId, data.code, data.lat, data.lng),
+    verifyAndMark(
+      context.userId,
+      data.fullName,
+      data.code,
+      data.lat,
+      data.lng,
+      data.accuracy,
+    ),
   );
 
 export const closeSession = createServerFn({ method: "POST" })

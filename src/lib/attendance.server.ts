@@ -67,9 +67,11 @@ export async function getActiveSessionRow() {
 
 export async function verifyAndMark(
   userId: string,
+  fullName: string,
   code: string,
   lat: number,
   lng: number,
+  accuracy?: number,
 ) {
   const session = await getActiveSessionRow();
   if (!session) {
@@ -102,28 +104,41 @@ export async function verifyAndMark(
     };
   }
 
-  const { error } = await supabaseAdmin.from("attendance_records").upsert(
-    {
-      session_id: session.id,
-      student_id: userId,
-      lat,
-      lng,
-      distance_m: distance,
-    },
-    { onConflict: "session_id,student_id" },
-  );
+  const name = fullName.trim().replace(/\s+/g, " ");
+  const payload = {
+    session_id: session.id,
+    student_id: userId,
+    full_name: name,
+    lat,
+    lng,
+    distance_m: distance,
+    accuracy_m: typeof accuracy === "number" ? accuracy : null,
+    marked_at: new Date().toISOString(),
+  };
+
+  const { data: existing } = await supabaseAdmin
+    .from("attendance_records")
+    .select("id")
+    .eq("session_id", session.id)
+    .ilike("full_name", name)
+    .maybeSingle();
+
+  if (existing) {
+    return { ok: true as const, distance, session, already: true as const };
+  }
+
+  const { error } = await supabaseAdmin.from("attendance_records").insert(payload);
   if (error) return { ok: false as const, reason: "Could not save attendance. Try again." };
 
-  return { ok: true as const, distance, session };
+  return { ok: true as const, distance, session, already: false as const };
 }
 
 export type ReportRow = {
   name: string;
-  email: string;
-  matric: string;
-  status: "Present" | "Absent";
-  markedAt: string | null;
+  status: "Present";
+  markedAt: string;
   distance: number | null;
+  accuracy: number | null;
 };
 
 export type Report = {
@@ -137,7 +152,6 @@ export type Report = {
   };
   rows: ReportRow[];
   presentCount: number;
-  absentCount: number;
 };
 
 export async function buildReport(sessionId: string): Promise<Report> {
@@ -148,33 +162,21 @@ export async function buildReport(sessionId: string): Promise<Report> {
     .single();
   if (!session) throw new Error("Session not found.");
 
-  const [{ data: profiles }, { data: records }] = await Promise.all([
-    supabaseAdmin.from("profiles").select("id, full_name, email, matric_no"),
-    supabaseAdmin
-      .from("attendance_records")
-      .select("student_id, marked_at, distance_m")
-      .eq("session_id", sessionId),
-  ]);
+  const { data: records } = await supabaseAdmin
+    .from("attendance_records")
+    .select("full_name, marked_at, distance_m, accuracy_m")
+    .eq("session_id", sessionId)
+    .order("marked_at", { ascending: true });
 
-  const marked = new Map((records ?? []).map((r) => [r.student_id, r]));
-  const rows: ReportRow[] = (profiles ?? [])
-    .map((p) => {
-      const rec = marked.get(p.id);
-      return {
-        name: p.full_name ?? "Unnamed",
-        email: p.email ?? "",
-        matric: p.matric_no ?? "—",
-        status: (rec ? "Present" : "Absent") as ReportRow["status"],
-        markedAt: rec?.marked_at ?? null,
-        distance: rec?.distance_m ?? null,
-      };
-    })
-    .sort((a, b) => a.status.localeCompare(b.status) || a.name.localeCompare(b.name));
+  const rows: ReportRow[] = (records ?? [])
+    .map((r) => ({
+      name: r.full_name,
+      status: "Present" as const,
+      markedAt: r.marked_at,
+      distance: r.distance_m,
+      accuracy: r.accuracy_m,
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
 
-  return {
-    session,
-    rows,
-    presentCount: rows.filter((r) => r.status === "Present").length,
-    absentCount: rows.filter((r) => r.status === "Absent").length,
-  };
+  return { session, rows, presentCount: rows.length };
 }
