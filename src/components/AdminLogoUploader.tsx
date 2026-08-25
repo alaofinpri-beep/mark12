@@ -31,7 +31,7 @@ export function AdminLogoUploader() {
   const [appName, setAppName] = useState(settings?.app_name ?? "Smart Attendance");
   const [busy, setBusy] = useState(false);
 
-  async function save(patch: Record<string, string>) {
+  async function save(patch: { app_name?: string; logo_url?: string }) {
     setBusy(true);
     const { error } = await supabase.from("app_settings").update(patch).eq("id", 1);
     setBusy(false);
