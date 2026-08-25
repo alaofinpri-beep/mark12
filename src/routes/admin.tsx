@@ -80,10 +80,19 @@ function AdminScreen() {
     queryFn: async () => {
       const { data: rows } = await supabase
         .from("attendance_records")
-        .select("student_id, marked_at, distance_m, profiles(full_name, matric_no)")
+        .select("student_id, marked_at, distance_m")
         .eq("session_id", session!.id)
         .order("marked_at", { ascending: false });
-      return rows ?? [];
+      const ids = (rows ?? []).map((r) => r.student_id);
+      const { data: people } = ids.length
+        ? await supabase.from("profiles").select("id, full_name, matric_no").in("id", ids)
+        : { data: [] };
+      const byId = new Map((people ?? []).map((p) => [p.id, p]));
+      return (rows ?? []).map((r) => ({
+        ...r,
+        full_name: byId.get(r.student_id)?.full_name ?? null,
+        matric_no: byId.get(r.student_id)?.matric_no ?? null,
+      }));
     },
   });
 
