@@ -372,7 +372,7 @@ function AdminScreen() {
           </p>
           <ul className="mt-3 space-y-2">
             {(present ?? []).map((r) => {
-              const p = r.profiles as { full_name: string | null; matric_no: string | null } | null;
+              const p = r;
               return (
                 <li
                   key={r.student_id}
