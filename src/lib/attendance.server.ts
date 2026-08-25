@@ -67,9 +67,11 @@ export async function getActiveSessionRow() {
 
 export async function verifyAndMark(
   userId: string,
+  fullName: string,
   code: string,
   lat: number,
   lng: number,
+  accuracy?: number,
 ) {
   const session = await getActiveSessionRow();
   if (!session) {
