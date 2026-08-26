@@ -42,6 +42,35 @@ export const Route = createFileRoute("/admin")({
   component: AdminScreen,
 });
 
+const RADIUS_OPTIONS = [30, 50, 100, 200] as const;
+
+function RadiusPicker({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <div className="mt-2 grid grid-cols-4 gap-2">
+      {RADIUS_OPTIONS.map((r) => (
+        <button
+          key={r}
+          type="button"
+          onClick={() => onChange(r)}
+          className={`tap-scale h-11 rounded-xl text-sm font-semibold transition-colors ${
+            value === r
+              ? "bg-gradient-primary text-primary-foreground shadow-float"
+              : "bg-secondary text-muted-foreground"
+          }`}
+        >
+          {r}m
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function AdminScreen() {
   const navigate = useNavigate();
   const { user, loading } = useAuth();
@@ -56,7 +85,7 @@ function AdminScreen() {
   const [busy, setBusy] = useState(false);
   const [courseName, setCourseName] = useState("");
   const [courseCode, setCourseCode] = useState("");
-  const [radius, setRadius] = useState(30);
+  const [radius, setRadius] = useState(50);
   const [report, setReport] = useState<Report | null>(null);
 
   useEffect(() => {
@@ -80,19 +109,10 @@ function AdminScreen() {
     queryFn: async () => {
       const { data: rows } = await supabase
         .from("attendance_records")
-        .select("student_id, marked_at, distance_m")
+        .select("id, full_name, marked_at, distance_m, accuracy_m")
         .eq("session_id", session!.id)
         .order("marked_at", { ascending: false });
-      const ids = (rows ?? []).map((r) => r.student_id);
-      const { data: people } = ids.length
-        ? await supabase.from("profiles").select("id, full_name, matric_no").in("id", ids)
-        : { data: [] };
-      const byId = new Map((people ?? []).map((p) => [p.id, p]));
-      return (rows ?? []).map((r) => ({
-        ...r,
-        full_name: byId.get(r.student_id)?.full_name ?? null,
-        matric_no: byId.get(r.student_id)?.matric_no ?? null,
-      }));
+      return rows ?? [];
     },
   });
 
@@ -158,16 +178,15 @@ function AdminScreen() {
 
   function downloadReport() {
     if (!report) return;
-    const header = "Name,Matric No,Email,Status,Marked At,Distance (m)";
+    const header = "Full Name,Status,Attendance Time,Distance (m),GPS Accuracy (m)";
     const body = report.rows
       .map((r) =>
         [
           r.name,
-          r.matric,
-          r.email,
           r.status,
-          r.markedAt ? new Date(r.markedAt).toLocaleString() : "",
+          new Date(r.markedAt).toLocaleString(),
           r.distance !== null ? Math.round(r.distance) : "",
+          r.accuracy !== null ? Math.round(r.accuracy) : "",
         ]
           .map((v) => `"${String(v).replace(/"/g, '""')}"`)
           .join(","),
@@ -269,21 +288,12 @@ function AdminScreen() {
             />
           </div>
 
-          <div className="mt-4 grid grid-cols-[minmax(0,1fr)_auto] items-end gap-3">
-            <div className="min-w-0">
-              <Label className="text-xs text-muted-foreground">Radius (m)</Label>
-              <Input
-                type="number"
-                min={5}
-                max={2000}
-                value={radius}
-                onChange={(e) => setRadius(Number(e.target.value))}
-                className="mt-1 h-11 rounded-xl"
-              />
-            </div>
+          <div className="mt-4">
+            <Label className="text-xs text-muted-foreground">Attendance radius</Label>
+            <RadiusPicker value={radius} onChange={setRadius} />
             <Button
               variant="outline"
-              className="tap-scale h-11 shrink-0 rounded-xl"
+              className="tap-scale mt-2 h-11 w-full rounded-xl"
               onClick={async () => {
                 await update({
                   data: {
@@ -296,7 +306,7 @@ function AdminScreen() {
                 toast.success("Session updated");
               }}
             >
-              Update
+              Update radius &amp; my location
             </Button>
           </div>
 
@@ -333,15 +343,11 @@ function AdminScreen() {
             />
           </div>
           <div>
-            <Label className="text-xs text-muted-foreground">Attendance radius (m)</Label>
-            <Input
-              type="number"
-              min={5}
-              max={2000}
-              value={radius}
-              onChange={(e) => setRadius(Number(e.target.value))}
-              className="mt-1 h-12 rounded-xl"
-            />
+            <Label className="text-xs text-muted-foreground">Attendance radius</Label>
+            <RadiusPicker value={radius} onChange={setRadius} />
+            <p className="mt-1.5 text-[11px] text-muted-foreground">
+              50m is recommended — phone GPS can drift several meters, especially indoors.
+            </p>
           </div>
           <MapCard
             center={coords ? { lat: coords.lat, lng: coords.lng } : null}
@@ -371,27 +377,26 @@ function AdminScreen() {
             </span>
           </p>
           <ul className="mt-3 space-y-2">
-            {(present ?? []).map((r) => {
-              const p = r;
-              return (
-                <li
-                  key={r.student_id}
-                  className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-2xl bg-secondary px-3 py-2"
-                >
-                  <span className="min-w-0">
-                    <span className="block truncate text-sm font-medium">
-                      {p?.full_name ?? "Student"}
-                    </span>
-                    <span className="block truncate text-xs text-muted-foreground">
-                      {p?.matric_no ?? "—"}
-                    </span>
+            {(present ?? []).map((r) => (
+              <li
+                key={r.id}
+                className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-2xl bg-secondary px-3 py-2"
+              >
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-medium">{r.full_name}</span>
+                  <span className="block truncate text-xs text-muted-foreground">
+                    {new Date(r.marked_at).toLocaleTimeString([], {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                    {r.distance_m !== null ? ` · ${formatDistance(r.distance_m)} away` : ""}
                   </span>
-                  <span className="shrink-0 text-xs text-muted-foreground">
-                    {r.distance_m !== null ? formatDistance(r.distance_m) : ""}
-                  </span>
-                </li>
-              );
-            })}
+                </span>
+                <span className="shrink-0 rounded-full bg-accent px-2 py-0.5 text-[11px] font-medium text-primary">
+                  GPS verified
+                </span>
+              </li>
+            ))}
             {!present?.length ? (
               <li className="py-3 text-center text-sm text-muted-foreground">
                 No check-ins yet.
@@ -407,7 +412,7 @@ function AdminScreen() {
             <div className="min-w-0">
               <p className="truncate font-semibold">Final report</p>
               <p className="truncate text-xs text-muted-foreground">
-                {report.presentCount} present · {report.absentCount} absent
+                {report.presentCount} student{report.presentCount === 1 ? "" : "s"} present
               </p>
             </div>
             <Button
@@ -421,24 +426,25 @@ function AdminScreen() {
           <ul className="mt-3 max-h-72 space-y-1.5 overflow-y-auto">
             {report.rows.map((r) => (
               <li
-                key={`${r.matric}-${r.name}`}
+                key={r.name}
                 className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-xl bg-secondary px-3 py-2 text-sm"
               >
                 <span className="min-w-0">
                   <span className="block truncate font-medium">{r.name}</span>
-                  <span className="block truncate text-xs text-muted-foreground">{r.matric}</span>
+                  <span className="block truncate text-xs text-muted-foreground">
+                    {new Date(r.markedAt).toLocaleString()}
+                  </span>
                 </span>
-                <span
-                  className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${
-                    r.status === "Present"
-                      ? "bg-accent text-primary"
-                      : "bg-destructive/10 text-destructive"
-                  }`}
-                >
-                  {r.status}
+                <span className="shrink-0 rounded-full bg-accent px-2 py-0.5 text-xs font-medium text-primary">
+                  Present
                 </span>
               </li>
             ))}
+            {!report.rows.length ? (
+              <li className="py-3 text-center text-sm text-muted-foreground">
+                No students marked present.
+              </li>
+            ) : null}
           </ul>
         </section>
       ) : null}

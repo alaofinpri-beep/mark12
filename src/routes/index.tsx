@@ -18,7 +18,7 @@ export const Route = createFileRoute("/")({
       {
         property: "og:description",
         content:
-          "Rotating attendance codes, live map verification and instant present/absent reports.",
+          "Rotating attendance codes, live GPS map verification and instant present-student reports.",
       },
     ],
   }),
