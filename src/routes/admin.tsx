@@ -377,27 +377,26 @@ function AdminScreen() {
             </span>
           </p>
           <ul className="mt-3 space-y-2">
-            {(present ?? []).map((r) => {
-              const p = r;
-              return (
-                <li
-                  key={r.student_id}
-                  className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-2xl bg-secondary px-3 py-2"
-                >
-                  <span className="min-w-0">
-                    <span className="block truncate text-sm font-medium">
-                      {p?.full_name ?? "Student"}
-                    </span>
-                    <span className="block truncate text-xs text-muted-foreground">
-                      {p?.matric_no ?? "—"}
-                    </span>
+            {(present ?? []).map((r) => (
+              <li
+                key={r.id}
+                className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-2xl bg-secondary px-3 py-2"
+              >
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-medium">{r.full_name}</span>
+                  <span className="block truncate text-xs text-muted-foreground">
+                    {new Date(r.marked_at).toLocaleTimeString([], {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                    {r.distance_m !== null ? ` · ${formatDistance(r.distance_m)} away` : ""}
                   </span>
-                  <span className="shrink-0 text-xs text-muted-foreground">
-                    {r.distance_m !== null ? formatDistance(r.distance_m) : ""}
-                  </span>
-                </li>
-              );
-            })}
+                </span>
+                <span className="shrink-0 rounded-full bg-accent px-2 py-0.5 text-[11px] font-medium text-primary">
+                  GPS verified
+                </span>
+              </li>
+            ))}
             {!present?.length ? (
               <li className="py-3 text-center text-sm text-muted-foreground">
                 No check-ins yet.
@@ -413,7 +412,7 @@ function AdminScreen() {
             <div className="min-w-0">
               <p className="truncate font-semibold">Final report</p>
               <p className="truncate text-xs text-muted-foreground">
-                {report.presentCount} present · {report.absentCount} absent
+                {report.presentCount} student{report.presentCount === 1 ? "" : "s"} present
               </p>
             </div>
             <Button
@@ -427,24 +426,25 @@ function AdminScreen() {
           <ul className="mt-3 max-h-72 space-y-1.5 overflow-y-auto">
             {report.rows.map((r) => (
               <li
-                key={`${r.matric}-${r.name}`}
+                key={r.name}
                 className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-xl bg-secondary px-3 py-2 text-sm"
               >
                 <span className="min-w-0">
                   <span className="block truncate font-medium">{r.name}</span>
-                  <span className="block truncate text-xs text-muted-foreground">{r.matric}</span>
+                  <span className="block truncate text-xs text-muted-foreground">
+                    {new Date(r.markedAt).toLocaleString()}
+                  </span>
                 </span>
-                <span
-                  className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${
-                    r.status === "Present"
-                      ? "bg-accent text-primary"
-                      : "bg-destructive/10 text-destructive"
-                  }`}
-                >
-                  {r.status}
+                <span className="shrink-0 rounded-full bg-accent px-2 py-0.5 text-xs font-medium text-primary">
+                  Present
                 </span>
               </li>
             ))}
+            {!report.rows.length ? (
+              <li className="py-3 text-center text-sm text-muted-foreground">
+                No students marked present.
+              </li>
+            ) : null}
           </ul>
         </section>
       ) : null}
