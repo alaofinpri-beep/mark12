@@ -42,6 +42,35 @@ export const Route = createFileRoute("/admin")({
   component: AdminScreen,
 });
 
+const RADIUS_OPTIONS = [30, 50, 100, 200] as const;
+
+function RadiusPicker({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <div className="mt-2 grid grid-cols-4 gap-2">
+      {RADIUS_OPTIONS.map((r) => (
+        <button
+          key={r}
+          type="button"
+          onClick={() => onChange(r)}
+          className={`tap-scale h-11 rounded-xl text-sm font-semibold transition-colors ${
+            value === r
+              ? "bg-gradient-primary text-primary-foreground shadow-float"
+              : "bg-secondary text-muted-foreground"
+          }`}
+        >
+          {r}m
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function AdminScreen() {
   const navigate = useNavigate();
   const { user, loading } = useAuth();
@@ -259,21 +288,12 @@ function AdminScreen() {
             />
           </div>
 
-          <div className="mt-4 grid grid-cols-[minmax(0,1fr)_auto] items-end gap-3">
-            <div className="min-w-0">
-              <Label className="text-xs text-muted-foreground">Radius (m)</Label>
-              <Input
-                type="number"
-                min={5}
-                max={2000}
-                value={radius}
-                onChange={(e) => setRadius(Number(e.target.value))}
-                className="mt-1 h-11 rounded-xl"
-              />
-            </div>
+          <div className="mt-4">
+            <Label className="text-xs text-muted-foreground">Attendance radius</Label>
+            <RadiusPicker value={radius} onChange={setRadius} />
             <Button
               variant="outline"
-              className="tap-scale h-11 shrink-0 rounded-xl"
+              className="tap-scale mt-2 h-11 w-full rounded-xl"
               onClick={async () => {
                 await update({
                   data: {
@@ -286,7 +306,7 @@ function AdminScreen() {
                 toast.success("Session updated");
               }}
             >
-              Update
+              Update radius &amp; my location
             </Button>
           </div>
 
@@ -323,15 +343,11 @@ function AdminScreen() {
             />
           </div>
           <div>
-            <Label className="text-xs text-muted-foreground">Attendance radius (m)</Label>
-            <Input
-              type="number"
-              min={5}
-              max={2000}
-              value={radius}
-              onChange={(e) => setRadius(Number(e.target.value))}
-              className="mt-1 h-12 rounded-xl"
-            />
+            <Label className="text-xs text-muted-foreground">Attendance radius</Label>
+            <RadiusPicker value={radius} onChange={setRadius} />
+            <p className="mt-1.5 text-[11px] text-muted-foreground">
+              50m is recommended — phone GPS can drift several meters, especially indoors.
+            </p>
           </div>
           <MapCard
             center={coords ? { lat: coords.lat, lng: coords.lng } : null}
