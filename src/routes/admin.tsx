@@ -56,7 +56,7 @@ function AdminScreen() {
   const [busy, setBusy] = useState(false);
   const [courseName, setCourseName] = useState("");
   const [courseCode, setCourseCode] = useState("");
-  const [radius, setRadius] = useState(30);
+  const [radius, setRadius] = useState(50);
   const [report, setReport] = useState<Report | null>(null);
 
   useEffect(() => {
@@ -80,19 +80,10 @@ function AdminScreen() {
     queryFn: async () => {
       const { data: rows } = await supabase
         .from("attendance_records")
-        .select("student_id, marked_at, distance_m")
+        .select("id, full_name, marked_at, distance_m, accuracy_m")
         .eq("session_id", session!.id)
         .order("marked_at", { ascending: false });
-      const ids = (rows ?? []).map((r) => r.student_id);
-      const { data: people } = ids.length
-        ? await supabase.from("profiles").select("id, full_name, matric_no").in("id", ids)
-        : { data: [] };
-      const byId = new Map((people ?? []).map((p) => [p.id, p]));
-      return (rows ?? []).map((r) => ({
-        ...r,
-        full_name: byId.get(r.student_id)?.full_name ?? null,
-        matric_no: byId.get(r.student_id)?.matric_no ?? null,
-      }));
+      return rows ?? [];
     },
   });
 
@@ -158,16 +149,15 @@ function AdminScreen() {
 
   function downloadReport() {
     if (!report) return;
-    const header = "Name,Matric No,Email,Status,Marked At,Distance (m)";
+    const header = "Full Name,Status,Attendance Time,Distance (m),GPS Accuracy (m)";
     const body = report.rows
       .map((r) =>
         [
           r.name,
-          r.matric,
-          r.email,
           r.status,
-          r.markedAt ? new Date(r.markedAt).toLocaleString() : "",
+          new Date(r.markedAt).toLocaleString(),
           r.distance !== null ? Math.round(r.distance) : "",
+          r.accuracy !== null ? Math.round(r.accuracy) : "",
         ]
           .map((v) => `"${String(v).replace(/"/g, '""')}"`)
           .join(","),
