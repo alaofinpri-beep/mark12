@@ -14,9 +14,42 @@ export type Database = {
   }
   public: {
     Tables: {
+      admin_grants: {
+        Row: {
+          created_at: string
+          id: string
+          is_general: boolean
+          section_id: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          is_general?: boolean
+          section_id?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          is_general?: boolean
+          section_id?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "admin_grants_section_id_fkey"
+            columns: ["section_id"]
+            isOneToOne: false
+            referencedRelation: "sections"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       app_settings: {
         Row: {
           app_name: string
+          general_passkey: string
           id: number
           logo_url: string | null
           report_email: string
@@ -24,6 +57,7 @@ export type Database = {
         }
         Insert: {
           app_name?: string
+          general_passkey?: string
           id?: number
           logo_url?: string | null
           report_email?: string
@@ -31,6 +65,7 @@ export type Database = {
         }
         Update: {
           app_name?: string
+          general_passkey?: string
           id?: number
           logo_url?: string | null
           report_email?: string
@@ -125,6 +160,7 @@ export type Database = {
           lat: number
           lng: number
           radius_m: number
+          section_id: string | null
           started_at: string
         }
         Insert: {
@@ -137,6 +173,7 @@ export type Database = {
           lat: number
           lng: number
           radius_m?: number
+          section_id?: string | null
           started_at?: string
         }
         Update: {
@@ -149,9 +186,18 @@ export type Database = {
           lat?: number
           lng?: number
           radius_m?: number
+          section_id?: string | null
           started_at?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "attendance_sessions_section_id_fkey"
+            columns: ["section_id"]
+            isOneToOne: false
+            referencedRelation: "sections"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       profiles: {
         Row: {
@@ -174,6 +220,30 @@ export type Database = {
           full_name?: string | null
           id?: string
           matric_no?: string | null
+        }
+        Relationships: []
+      }
+      sections: {
+        Row: {
+          created_at: string
+          id: string
+          name: string
+          passkey: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          name: string
+          passkey: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          name?: string
+          passkey?: string
+          updated_at?: string
         }
         Relationships: []
       }
