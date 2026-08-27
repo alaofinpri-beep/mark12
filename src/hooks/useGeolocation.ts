@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-export type Coords = { lat: number; lng: number; accuracy: number };
+export type Coords = { lat: number; lng: number; accuracy: number; at: number };
 
 export type GeoStatus = "idle" | "prompt" | "locating" | "ready" | "denied" | "error";
 
 /** Readings worse than this are treated as a weak signal (still usable, but flagged). */
-export const WEAK_ACCURACY_M = 50;
+export const WEAK_ACCURACY_M = 60;
+/** Readings worse than this are rejected outright — they cause huge phantom distances. */
+export const MAX_ACCURACY_M = 250;
 
 export function useGeolocation(enabled: boolean) {
   const [coords, setCoords] = useState<Coords | null>(null);
@@ -39,7 +41,6 @@ export function useGeolocation(enabled: boolean) {
 
     setStatus((s) => (s === "ready" ? s : "locating"));
 
-    // Surface the permission state up-front so we can prompt clearly.
     navigator.permissions
       ?.query({ name: "geolocation" as PermissionName })
       .then((p) => {
@@ -55,16 +56,30 @@ export function useGeolocation(enabled: boolean) {
       .catch(() => undefined);
 
     const onPos = (pos: GeolocationPosition) => {
-      lastFix.current = Date.now();
-      const acc = pos.coords.accuracy;
-      // Mock/spoofed providers usually report a perfect fix with no motion data.
+      const acc = pos.coords.accuracy ?? 9999;
+      const now = Date.now();
+
+      // Coarse network/cell fixes can be kilometres off — that is what makes two
+      // phones side by side look hundreds of meters apart. Reject them once a
+      // better recent fix exists, and never accept anything wildly imprecise.
+      const current = coordsRef.current;
+      const currentFresh = !!current && now - current.at < 20000;
+      if (currentFresh && acc > current!.accuracy * 1.6 && acc > 25) return;
+      if (acc > MAX_ACCURACY_M && currentFresh) return;
+
+      lastFix.current = now;
       const looksMocked =
         (pos as GeolocationPosition & { coords: { mocked?: boolean } }).coords.mocked === true ||
         acc === 0;
       setMocked(looksMocked);
       setError(null);
       setStatus("ready");
-      setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: acc });
+      setCoords({
+        lat: pos.coords.latitude,
+        lng: pos.coords.longitude,
+        accuracy: acc,
+        at: now,
+      });
     };
 
     const onErr = (err: GeolocationPositionError) => {
@@ -73,7 +88,6 @@ export function useGeolocation(enabled: boolean) {
         setError("Location permission denied. Allow location access to continue.");
         return;
       }
-      // Keep the last good fix rather than blanking the map on a transient failure.
       if (coordsRef.current && Date.now() - lastFix.current < 60000) {
         setError("Weak GPS signal — using your last known position. Move to an open area.");
         return;
@@ -86,17 +100,17 @@ export function useGeolocation(enabled: boolean) {
       );
     };
 
-    // Fast, low-accuracy first fix so the map appears immediately…
+    // Fast first fix so the map appears immediately…
     navigator.geolocation.getCurrentPosition(onPos, () => undefined, {
-      enableHighAccuracy: false,
-      maximumAge: 30000,
-      timeout: 8000,
+      enableHighAccuracy: true,
+      maximumAge: 0,
+      timeout: 12000,
     });
-    // …then a continuous high-accuracy watch.
+    // …then a continuous high-accuracy watch that keeps refining the reading.
     watchId.current = navigator.geolocation.watchPosition(onPos, onErr, {
       enableHighAccuracy: true,
-      maximumAge: 2000,
-      timeout: 25000,
+      maximumAge: 0,
+      timeout: 30000,
     });
 
     return () => {
