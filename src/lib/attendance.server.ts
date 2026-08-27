@@ -121,9 +121,9 @@ export async function updateSection(
   id: string,
   patch: { name?: string; passkey?: string },
 ) {
-  const body: Record<string, string> = {};
-  if (patch.name) body["name"] = patch.name.trim();
-  if (patch.passkey) body["passkey"] = patch.passkey.trim();
+  const body: { name?: string; passkey?: string } = {};
+  if (patch.name) body.name = patch.name.trim();
+  if (patch.passkey) body.passkey = patch.passkey.trim();
   if (!Object.keys(body).length) return;
   const { error } = await supabaseAdmin.from("sections").update(body).eq("id", id);
   if (error) throw new Error("Could not update the section.");
