@@ -103,7 +103,7 @@ export function AdminLogoUploader() {
       </div>
 
       <p className="mt-3 text-xs text-muted-foreground">
-        Reports are addressed to {settings?.report_email ?? "the configured admin email"}.
+        Section admins run their own dashboards; the General Admin can see every record.
       </p>
     </section>
   );
