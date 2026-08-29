@@ -6,8 +6,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   Check,
-  Copy,
-  KeyRound,
+  ChevronRight,
   MapPin,
   Navigation,
   RefreshCw,
@@ -18,7 +17,7 @@ import { MapCard } from "@/components/MapCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { getLiveSession, markAttendance } from "@/lib/attendance.functions";
+import { getSections, getSectionSession, markAttendance } from "@/lib/attendance.functions";
 import { formatDistance, haversineMeters } from "@/lib/geo";
 import { useAuth } from "@/hooks/useAuth";
 import { useGeolocation } from "@/hooks/useGeolocation";
@@ -30,12 +29,12 @@ export const Route = createFileRoute("/attendance")({
       {
         name: "description",
         content:
-          "Enter your full name, generate the live class code and verify your presence inside the lecturer's GPS radius.",
+          "Pick your section, turn on location and verify your presence inside the lecturer's GPS radius with the live 4-minute code.",
       },
       { property: "og:title", content: "Mark Attendance — Smart Attendance" },
       {
         property: "og:description",
-        content: "Enter your name, get the live code and verify your presence by GPS.",
+        content: "Pick your section, turn on location and verify your presence by GPS.",
       },
     ],
   }),
@@ -45,10 +44,12 @@ export const Route = createFileRoute("/attendance")({
 function AttendanceScreen() {
   const navigate = useNavigate();
   const { user, loading } = useAuth();
-  const live = useServerFn(getLiveSession);
+  const sectionsFn = useServerFn(getSections);
+  const sessionFn = useServerFn(getSectionSession);
   const mark = useServerFn(markAttendance);
 
-  const [revealed, setRevealed] = useState(false);
+  const [section, setSection] = useState<{ id: string; name: string } | null>(null);
+  const [locationOn, setLocationOn] = useState(false);
   const [fullName, setFullName] = useState("");
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
@@ -58,22 +59,21 @@ function AttendanceScreen() {
     if (!loading && !user) navigate({ to: "/auth", replace: true });
   }, [loading, user, navigate]);
 
-  const { data } = useQuery({
-    queryKey: ["live-session"],
+  const { data: sections } = useQuery({
+    queryKey: ["public-sections"],
     enabled: !!user,
+    queryFn: () => sectionsFn(),
+  });
+
+  const { data } = useQuery({
+    queryKey: ["section-session", section?.id],
+    enabled: !!section,
     refetchInterval: 10000,
-    queryFn: () => live(),
+    queryFn: () => sessionFn({ data: { sectionId: section!.id } }),
   });
 
   const session = data?.session ?? null;
-  const {
-    coords,
-    error: geoError,
-    status: geoStatus,
-    weak,
-    mocked,
-    retry,
-  } = useGeolocation(!!session);
+  const { coords, error: geoError, status, weak, mocked, retry } = useGeolocation(locationOn);
 
   const distance = useMemo(() => {
     if (!session || !coords) return null;
@@ -84,12 +84,13 @@ function AttendanceScreen() {
   const nameValid = fullName.trim().replace(/\s+/g, " ").length >= 3;
 
   async function submit() {
+    if (!section) return;
     if (!nameValid) {
       toast.error("Enter your full name first.");
       return;
     }
     if (!coords) {
-      toast.error("Waiting for your location. Allow location access and try again.");
+      toast.error("Turn on location and wait for a GPS fix.");
       return;
     }
     if (!inside) {
@@ -100,6 +101,7 @@ function AttendanceScreen() {
     try {
       const res = await mark({
         data: {
+          sectionId: section.id,
           fullName: fullName.trim().replace(/\s+/g, " "),
           code: code.trim().toUpperCase(),
           lat: coords.lat,
@@ -129,37 +131,71 @@ function AttendanceScreen() {
           variant="ghost"
           size="icon"
           className="rounded-full"
-          onClick={() => navigate({ to: "/home" })}
+          onClick={() => (section ? setSection(null) : navigate({ to: "/home" }))}
           aria-label="Back"
         >
           <ArrowLeft className="size-5" />
         </Button>
-        <h1 className="text-lg font-semibold tracking-tight">Mark Attendance</h1>
+        <h1 className="truncate text-lg font-semibold tracking-tight">
+          {section ? section.name : "Choose your section"}
+        </h1>
       </header>
 
-      {!session ? (
+      {!section ? (
+        <section className="animate-rise mt-5 space-y-2 rounded-3xl bg-card p-5 shadow-card">
+          {(sections ?? []).map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              onClick={() => setSection(s)}
+              className="tap-scale grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-2xl bg-secondary px-4 py-3 text-left"
+            >
+              <span className="truncate text-sm font-medium">{s.name}</span>
+              <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+            </button>
+          ))}
+          {!sections?.length ? (
+            <p className="py-4 text-center text-sm text-muted-foreground">
+              No sections available yet.
+            </p>
+          ) : null}
+        </section>
+      ) : !locationOn ? (
+        <section className="animate-rise mt-6 rounded-3xl bg-card p-6 text-center shadow-card">
+          <span className="mx-auto grid size-14 place-items-center rounded-2xl bg-gradient-primary text-primary-foreground shadow-float">
+            <MapPin className="size-6" />
+          </span>
+          <p className="mt-4 font-semibold">Turn on location</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Your real GPS position is compared with your lecturer's location.
+          </p>
+          <Button
+            onClick={() => setLocationOn(true)}
+            className="tap-scale mt-4 h-12 w-full rounded-xl bg-gradient-primary text-base font-semibold text-primary-foreground shadow-float"
+          >
+            Turn on location
+          </Button>
+        </section>
+      ) : !session ? (
         <div className="animate-rise mt-6 rounded-3xl bg-card p-8 text-center shadow-card">
           <MapPin className="mx-auto size-8 text-muted-foreground" />
           <p className="mt-3 font-semibold">No open session</p>
           <p className="mt-1 text-sm text-muted-foreground">
-            Your lecturer hasn&apos;t started attendance yet. This page updates automatically.
+            Your section admin has not started attendance yet.
           </p>
         </div>
       ) : marked ? (
-        <div className="animate-rise mt-6 rounded-3xl bg-card p-8 text-center shadow-card">
+        <section className="animate-rise mt-6 rounded-3xl bg-card p-8 text-center shadow-card">
           <span className="mx-auto grid size-16 place-items-center rounded-full bg-gradient-primary text-primary-foreground shadow-float">
             <Check className="size-8" />
           </span>
-          <p className="mt-4 text-lg font-semibold">
-            {fullName.trim()} is marked present
-          </p>
+          <p className="mt-4 text-lg font-semibold">Attendance marked</p>
           <p className="mt-1 text-sm text-muted-foreground">
-            {session.course_name}
-            {distance !== null ? ` · ${formatDistance(distance)} from the lecturer` : ""}
+            {fullName.trim()} · {session.course_name}
           </p>
           <Button
             variant="outline"
-            className="tap-scale mt-6 h-12 w-full rounded-xl"
+            className="tap-scale mt-5 h-11 w-full rounded-xl"
             onClick={() => {
               setMarked(false);
               setFullName("");
@@ -168,148 +204,94 @@ function AttendanceScreen() {
           >
             Mark someone else on this phone
           </Button>
-          <Button
-            className="tap-scale mt-2 h-12 w-full rounded-xl bg-gradient-primary text-primary-foreground"
-            onClick={() => navigate({ to: "/home" })}
-          >
-            Done
-          </Button>
-        </div>
+        </section>
       ) : (
         <>
           <section className="animate-rise mt-5 rounded-3xl bg-card p-5 shadow-card">
-            <p className="text-xs text-muted-foreground">Active course</p>
             <p className="truncate text-lg font-semibold">{session.course_name}</p>
-            {session.course_code ? (
-              <p className="text-xs text-muted-foreground">{session.course_code}</p>
-            ) : null}
+            <p className="truncate text-xs text-muted-foreground">
+              {session.course_code || "—"} · radius {session.radius_m}m
+            </p>
 
             <div className="mt-4">
+              <MapCard
+                center={{ lat: session.lat, lng: session.lng }}
+                radius={session.radius_m}
+                student={coords ? { lat: coords.lat, lng: coords.lng } : null}
+                inside={inside}
+                className="h-56"
+              />
+            </div>
+
+            <div
+              className={`mt-3 rounded-2xl px-4 py-3 text-sm font-medium ${
+                inside ? "bg-accent text-primary" : "bg-secondary text-muted-foreground"
+              }`}
+            >
+              {distance === null ? (
+                <span className="flex items-center gap-2">
+                  <Navigation className="size-4 animate-pulse" /> Getting your location…
+                </span>
+              ) : inside ? (
+                <>✅ Location Verified · you are {formatDistance(distance)} from the lecturer</>
+              ) : (
+                <>❌ Move closer to the attendance area · {formatDistance(distance)} away</>
+              )}
+            </div>
+
+            {status === "ready" ? (
+              <p className="mt-2 text-[11px] text-muted-foreground">
+                GPS accuracy ±{Math.round(coords?.accuracy ?? 0)}m
+                {weak ? " — step outside or near a window for a sharper fix" : ""}
+              </p>
+            ) : null}
+            {mocked ? (
+              <p className="mt-2 flex items-center gap-1.5 text-xs text-destructive">
+                <AlertTriangle className="size-3.5" /> Mock location detected. Turn off fake GPS
+                apps.
+              </p>
+            ) : null}
+            {geoError ? (
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <p className="text-xs text-destructive">{geoError}</p>
+                <Button
+                  variant="outline"
+                  className="h-8 shrink-0 rounded-lg text-xs"
+                  onClick={retry}
+                >
+                  <RefreshCw className="size-3.5" /> Retry
+                </Button>
+              </div>
+            ) : null}
+          </section>
+
+          <section className="animate-rise mt-4 space-y-3 rounded-3xl bg-card p-5 shadow-card">
+            <div>
               <Label className="text-xs text-muted-foreground">Full name</Label>
               <Input
                 value={fullName}
-                onChange={(e) => setFullName(e.target.value.slice(0, 80))}
-                placeholder="e.g. Promise Alaofin"
-                autoComplete="name"
+                onChange={(e) => setFullName(e.target.value)}
+                placeholder="Surname First name"
+                maxLength={80}
                 className="mt-1 h-12 rounded-xl"
               />
-              <p className="mt-1.5 text-[11px] text-muted-foreground">
-                Using a friend&apos;s phone? Type your own full name — attendance is recorded
-                under this name.
-              </p>
             </div>
-
-            <div className="mt-4 rounded-2xl bg-accent p-4 text-center">
-              {revealed && data?.code ? (
-                <>
-                  <p className="text-xs text-muted-foreground">Current code</p>
-                  <p className="mt-1 font-mono text-3xl font-bold tracking-[0.35em] text-primary">
-                    {data.code.code}
-                  </p>
-                  <button
-                    type="button"
-                    className="mx-auto mt-2 flex items-center gap-1.5 text-xs font-medium text-primary"
-                    onClick={() => {
-                      navigator.clipboard?.writeText(data.code!.code);
-                      toast.success("Code copied");
-                    }}
-                  >
-                    <Copy className="size-3.5" /> Copy code
-                  </button>
-                </>
-              ) : (
-                <Button
-                  variant="ghost"
-                  className="tap-scale h-11 w-full rounded-xl font-semibold text-primary"
-                  onClick={() => setRevealed(true)}
-                >
-                  <KeyRound className="size-4" /> Generate Code
-                </Button>
-              )}
-            </div>
-          </section>
-
-          <section
-            className="animate-rise mt-4 rounded-3xl bg-card p-4 shadow-card"
-            style={{ animationDelay: "80ms" }}
-          >
-            <MapCard
-              center={{ lat: session.lat, lng: session.lng }}
-              radius={session.radius_m}
-              student={coords ? { lat: coords.lat, lng: coords.lng } : null}
-              inside={inside}
-              className="h-52"
-            />
-            <div className="mt-3 flex items-start gap-2 text-sm">
-              <Navigation
-                className={`mt-0.5 size-4 shrink-0 ${inside ? "text-primary" : "text-destructive"}`}
+            <div>
+              <Label className="text-xs text-muted-foreground">Attendance code</Label>
+              <Input
+                value={code}
+                onChange={(e) => setCode(e.target.value.toUpperCase())}
+                placeholder="ABC123"
+                maxLength={12}
+                className="mt-1 h-12 rounded-xl text-center font-mono text-lg tracking-[0.3em]"
               />
-              <div className="min-w-0">
-                {distance === null ? (
-                  <p className="text-muted-foreground">
-                    {geoStatus === "denied"
-                      ? "Location permission denied."
-                      : "📍 Locating you…"}
-                  </p>
-                ) : (
-                  <>
-                    <p className={inside ? "text-foreground" : "text-destructive"}>
-                      📍 You are {formatDistance(distance)} from the attendance location
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {inside
-                        ? `Inside the ${session.radius_m}m attendance area — you can verify now.`
-                        : `Move closer to the attendance area to verify — ${formatDistance(
-                            distance - session.radius_m,
-                          )} to go.`}
-                    </p>
-                  </>
-                )}
-                {geoError ? (
-                  <p className="mt-1 text-xs text-destructive">{geoError}</p>
-                ) : null}
-                {weak && coords ? (
-                  <p className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
-                    <AlertTriangle className="size-3" /> Weak GPS signal (±
-                    {Math.round(coords.accuracy)}m). Step outside for a better fix.
-                  </p>
-                ) : null}
-                {mocked ? (
-                  <p className="mt-1 flex items-center gap-1 text-xs text-destructive">
-                    <AlertTriangle className="size-3" /> A mock-location app appears to be
-                    active. Turn it off to verify.
-                  </p>
-                ) : null}
-                {geoError || geoStatus === "denied" || geoStatus === "error" ? (
-                  <button
-                    type="button"
-                    onClick={retry}
-                    className="mt-1.5 flex items-center gap-1 text-xs font-medium text-primary"
-                  >
-                    <RefreshCw className="size-3" /> Retry location
-                  </button>
-                ) : null}
-              </div>
             </div>
-          </section>
-
-          <section
-            className="animate-rise mt-4 rounded-3xl bg-card p-5 shadow-card"
-            style={{ animationDelay: "160ms" }}
-          >
-            <Input
-              value={code}
-              onChange={(e) => setCode(e.target.value.toUpperCase().slice(0, 12))}
-              placeholder="ENTER CODE"
-              maxLength={12}
-              className="h-14 rounded-xl text-center font-mono text-xl tracking-[0.3em]"
-            />
             <Button
-              disabled={busy || !nameValid || code.trim().length < 4 || mocked}
+              disabled={busy || !nameValid || code.trim().length < 4 || !inside}
               onClick={submit}
-              className="tap-scale mt-3 h-12 w-full rounded-xl bg-gradient-primary text-base font-semibold text-primary-foreground shadow-float hover:opacity-95"
+              className="tap-scale h-12 w-full rounded-xl bg-gradient-primary text-base font-semibold text-primary-foreground shadow-float"
             >
-              {busy ? "Verifying…" : "Verify & Mark Present"}
+              {busy ? "Verifying…" : "Verify & mark attendance"}
             </Button>
           </section>
         </>
