@@ -54,10 +54,17 @@ export async function unlockWithPasskey(userId: string, rawPasskey: string) {
 
   const general = await getGeneralPasskey();
   if (passkey.toUpperCase() === general.toUpperCase()) {
-    await supabaseAdmin
+    const { data: has } = await supabaseAdmin
       .from("admin_grants")
-      .upsert({ user_id: userId, is_general: true, section_id: null }, { onConflict: "user_id" })
-      .select("id");
+      .select("id")
+      .eq("user_id", userId)
+      .eq("is_general", true)
+      .maybeSingle();
+    if (!has) {
+      await supabaseAdmin
+        .from("admin_grants")
+        .insert({ user_id: userId, is_general: true, section_id: null });
+    }
     return { ok: true as const, role: "general" as const, section: null };
   }
 
