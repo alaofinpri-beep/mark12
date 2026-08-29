@@ -3,7 +3,7 @@ import { FileDown, Image as ImageIcon, Share2, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import { ReportPage, paginate } from "@/components/ReportSheet";
+import { ROWS_PER_PAGE, ReportPage, paginate } from "@/components/ReportSheet";
 import { downloadImages, downloadPdf, reportFileName, shareReport } from "@/lib/report-export";
 import type { Report } from "@/lib/attendance.server";
 
@@ -96,7 +96,7 @@ export function ReportViewer({ report, onClose }: { report: Report; onClose?: ()
                     rows={rows}
                     pageIndex={i}
                     pageCount={pages.length}
-                    startNo={i * rows.length + 1}
+                    startNo={i * ROWS_PER_PAGE + 1}
                   />
                 </div>
               ))}
