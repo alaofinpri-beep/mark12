@@ -206,6 +206,7 @@ export type Database = {
           full_name: string | null
           id: string
           matric_no: string | null
+          section_id: string | null
         }
         Insert: {
           created_at?: string
@@ -213,6 +214,7 @@ export type Database = {
           full_name?: string | null
           id: string
           matric_no?: string | null
+          section_id?: string | null
         }
         Update: {
           created_at?: string
@@ -220,8 +222,17 @@ export type Database = {
           full_name?: string | null
           id?: string
           matric_no?: string | null
+          section_id?: string | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "profiles_section_id_fkey"
+            columns: ["section_id"]
+            isOneToOne: false
+            referencedRelation: "sections"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       sections: {
         Row: {
