@@ -6,6 +6,8 @@ export type PublicSection = { id: string; name: string };
 
 export type Access = { general: boolean; sectionIds: string[] };
 
+export const GENERAL_LABEL = "General (all departments)";
+
 export function generateCode(): string {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   const bytes = new Uint8Array(6);
@@ -30,12 +32,15 @@ export async function getAccess(userId: string): Promise<Access> {
 export async function assertGeneral(userId: string) {
   const access = await getAccess(userId);
   if (!access.general) throw new Error("General Admin access required.");
+  return access;
 }
 
-export async function assertSectionAccess(userId: string, sectionId: string) {
+/** `null` sectionId means the General Admin scope. */
+export async function assertSectionAccess(userId: string, sectionId: string | null) {
   const access = await getAccess(userId);
-  if (access.general || access.sectionIds.includes(sectionId)) return access;
-  throw new Error("You do not have access to this section.");
+  if (access.general) return access;
+  if (sectionId && access.sectionIds.includes(sectionId)) return access;
+  throw new Error("You do not have access to this department.");
 }
 
 export async function getGeneralPasskey(): Promise<string> {
@@ -48,7 +53,11 @@ export async function getGeneralPasskey(): Promise<string> {
 }
 
 /** Verifies a passkey and records the matching grant for this user. */
-export async function unlockWithPasskey(userId: string, rawPasskey: string) {
+export async function unlockWithPasskey(
+  userId: string,
+  rawPasskey: string,
+  targetSectionId?: string | null,
+) {
   const passkey = rawPasskey.trim();
   if (!passkey) return { ok: false as const, reason: "Enter a passkey." };
 
@@ -73,6 +82,9 @@ export async function unlockWithPasskey(userId: string, rawPasskey: string) {
     (s) => s.passkey.trim().toUpperCase() === passkey.toUpperCase(),
   );
   if (!match) return { ok: false as const, reason: "Incorrect passkey." };
+  if (targetSectionId && targetSectionId !== match.id) {
+    return { ok: false as const, reason: "That passkey belongs to a different department." };
+  }
 
   const { data: existing } = await supabaseAdmin
     .from("admin_grants")
@@ -118,22 +130,21 @@ export async function createSection(name: string, passkey: string) {
     .single();
   if (error || !data) {
     throw new Error(
-      error?.code === "23505" ? "A section with that name already exists." : "Could not create the section.",
+      error?.code === "23505"
+        ? "A department with that name already exists."
+        : "Could not create the department.",
     );
   }
   return data;
 }
 
-export async function updateSection(
-  id: string,
-  patch: { name?: string; passkey?: string },
-) {
+export async function updateSection(id: string, patch: { name?: string; passkey?: string }) {
   const body: { name?: string; passkey?: string } = {};
   if (patch.name) body.name = patch.name.trim();
   if (patch.passkey) body.passkey = patch.passkey.trim();
   if (!Object.keys(body).length) return;
   const { error } = await supabaseAdmin.from("sections").update(body).eq("id", id);
-  if (error) throw new Error("Could not update the section.");
+  if (error) throw new Error("Could not update the department.");
   if (patch.passkey) {
     // Existing unlocks must re-authenticate with the new passkey.
     await supabaseAdmin.from("admin_grants").delete().eq("section_id", id);
@@ -142,7 +153,7 @@ export async function updateSection(
 
 export async function deleteSection(id: string) {
   const { error } = await supabaseAdmin.from("sections").delete().eq("id", id);
-  if (error) throw new Error("Could not delete the section.");
+  if (error) throw new Error("Could not delete the department.");
 }
 
 export async function setGeneralPasskey(passkey: string) {
@@ -184,30 +195,107 @@ export async function ensureActiveCode(sessionId: string): Promise<ActiveCode> {
 
 /* -------------------------------------------------------------- sessions */
 
-export async function getActiveSessionForSection(sectionId: string) {
-  const { data } = await supabaseAdmin
+/** `null` sectionId targets the cross-department General session. */
+export async function getActiveSessionForSection(sectionId: string | null) {
+  let query = supabaseAdmin
     .from("attendance_sessions")
     .select("*")
-    .eq("section_id", sectionId)
     .eq("is_active", true)
     .order("started_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .limit(1);
+  query = sectionId ? query.eq("section_id", sectionId) : query.is("section_id", null);
+  const { data } = await query.maybeSingle();
   return data;
+}
+
+export type StudentSession = {
+  id: string;
+  course_name: string;
+  course_code: string | null;
+  lat: number;
+  lng: number;
+  radius_m: number;
+  started_at: string;
+  sectionId: string | null;
+  sectionName: string;
+  code: string;
+  expiresAt: string;
+};
+
+/** Sessions a student may mark: their own department plus any General session. */
+export async function listStudentSessions(
+  studentSectionId: string | null,
+): Promise<StudentSession[]> {
+  const out: StudentSession[] = [];
+
+  const general = await getActiveSessionForSection(null);
+  if (general) out.push(await decorate(general, null, GENERAL_LABEL));
+
+  if (studentSectionId) {
+    const own = await getActiveSessionForSection(studentSectionId);
+    if (own) {
+      const { data: sec } = await supabaseAdmin
+        .from("sections")
+        .select("name")
+        .eq("id", studentSectionId)
+        .maybeSingle();
+      out.push(await decorate(own, studentSectionId, sec?.name ?? "My department"));
+    }
+  }
+  return out;
+}
+
+async function decorate(
+  s: {
+    id: string;
+    course_name: string;
+    course_code: string | null;
+    lat: number;
+    lng: number;
+    radius_m: number;
+    started_at: string;
+  },
+  sectionId: string | null,
+  sectionName: string,
+): Promise<StudentSession> {
+  const code = await ensureActiveCode(s.id);
+  return {
+    id: s.id,
+    course_name: s.course_name,
+    course_code: s.course_code,
+    lat: s.lat,
+    lng: s.lng,
+    radius_m: s.radius_m,
+    started_at: s.started_at,
+    sectionId,
+    sectionName,
+    code: code.code,
+    expiresAt: code.expiresAt,
+  };
 }
 
 export async function verifyAndMark(
   userId: string,
-  sectionId: string,
+  studentSectionId: string | null,
+  sessionId: string,
   fullName: string,
   code: string,
   lat: number,
   lng: number,
   accuracy?: number,
 ) {
-  const session = await getActiveSessionForSection(sectionId);
-  if (!session) {
-    return { ok: false as const, reason: "No attendance session is open for this section." };
+  const { data: session } = await supabaseAdmin
+    .from("attendance_sessions")
+    .select("*")
+    .eq("id", sessionId)
+    .maybeSingle();
+
+  if (!session || !session.is_active) {
+    return { ok: false as const, reason: "That attendance session is no longer open." };
+  }
+  const eligible = session.section_id === null || session.section_id === studentSectionId;
+  if (!eligible) {
+    return { ok: false as const, reason: "This session belongs to another department." };
   }
 
   const nowIso = new Date().toISOString();
@@ -222,7 +310,7 @@ export async function verifyAndMark(
   if (!match) {
     return {
       ok: false as const,
-      reason: "That code is invalid or has expired. Get the latest code and try again.",
+      reason: "That code is invalid or has expired. Copy the latest code and try again.",
     };
   }
 
@@ -232,7 +320,6 @@ export async function verifyAndMark(
       ok: false as const,
       reason: `You are ${Math.round(distance - session.radius_m)} meters outside the attendance area. Move closer to verify.`,
       distance,
-      session,
     };
   }
 
@@ -245,7 +332,7 @@ export async function verifyAndMark(
     .maybeSingle();
 
   if (existing) {
-    return { ok: true as const, distance, session, already: true as const };
+    return { ok: true as const, distance, already: true as const };
   }
 
   const { error } = await supabaseAdmin.from("attendance_records").insert({
@@ -260,7 +347,7 @@ export async function verifyAndMark(
   });
   if (error) return { ok: false as const, reason: "Could not save attendance. Try again." };
 
-  return { ok: true as const, distance, session, already: false as const };
+  return { ok: true as const, distance, already: false as const };
 }
 
 /* --------------------------------------------------------------- reports */
@@ -305,14 +392,14 @@ export async function buildReport(sessionId: string): Promise<Report> {
     .single();
   if (!session) throw new Error("Session not found.");
 
-  let sectionName = "General";
+  let sectionName = GENERAL_LABEL;
   if (session.section_id) {
     const { data: sec } = await supabaseAdmin
       .from("sections")
       .select("name")
       .eq("id", session.section_id)
       .maybeSingle();
-    sectionName = sec?.name ?? "General";
+    sectionName = sec?.name ?? GENERAL_LABEL;
   }
 
   const { data: records } = await supabaseAdmin
@@ -359,7 +446,17 @@ export async function listSessionHistory(access: Access): Promise<SessionSummary
 
   return sessions.map((s) => ({
     ...s,
-    sectionName: (s.section_id && names.get(s.section_id)) || "General",
+    sectionName: (s.section_id && names.get(s.section_id)) || GENERAL_LABEL,
     presentCount: tally.get(s.id) ?? 0,
   }));
+}
+
+export async function deleteSessionCompletely(sessionId: string) {
+  await supabaseAdmin.from("attendance_records").delete().eq("session_id", sessionId);
+  await supabaseAdmin.from("attendance_codes").delete().eq("session_id", sessionId);
+  const { error } = await supabaseAdmin
+    .from("attendance_sessions")
+    .delete()
+    .eq("id", sessionId);
+  if (error) throw new Error("Could not delete that report.");
 }
