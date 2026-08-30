@@ -8,24 +8,98 @@ import {
   buildReport,
   createSection,
   deleteSection,
+  deleteSessionCompletely,
   ensureActiveCode,
   getAccess,
   getActiveSessionForSection,
   listPublicSections,
   listSections,
   listSessionHistory,
+  listStudentSessions,
   setGeneralPasskey,
   unlockWithPasskey,
   updateSection,
   verifyAndMark,
 } from "./attendance.server";
 
+const nullableSectionId = z.string().uuid().nullable();
+
+async function studentSectionId(userId: string): Promise<string | null> {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { data } = await supabaseAdmin
+    .from("profiles")
+    .select("section_id")
+    .eq("id", userId)
+    .maybeSingle();
+  return data?.section_id ?? null;
+}
+
+/* ------------------------------------------------------------ departments */
+
+/** Public: used by the sign-up form before a session exists. */
+export const listDepartments = createServerFn({ method: "GET" }).handler(async () => {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { data } = await supabaseAdmin
+    .from("sections")
+    .select("id, name")
+    .order("created_at", { ascending: true });
+  return data ?? [];
+});
+
+export const getSections = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .handler(async () => listPublicSections());
+
+export const getMyProfile = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data } = await supabaseAdmin
+      .from("profiles")
+      .select("id, full_name, email, matric_no, section_id")
+      .eq("id", context.userId)
+      .maybeSingle();
+    let sectionName: string | null = null;
+    if (data?.section_id) {
+      const { data: sec } = await supabaseAdmin
+        .from("sections")
+        .select("name")
+        .eq("id", data.section_id)
+        .maybeSingle();
+      sectionName = sec?.name ?? null;
+    }
+    return { profile: data ?? null, sectionName };
+  });
+
+export const setMyDepartment = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d: { sectionId: string }) =>
+    z.object({ sectionId: z.string().uuid() }).parse(d),
+  )
+  .handler(async ({ data, context }) => {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    await supabaseAdmin
+      .from("profiles")
+      .update({ section_id: data.sectionId })
+      .eq("id", context.userId);
+    return { ok: true as const };
+  });
+
+/* ----------------------------------------------------------------- admin */
+
 export const unlockAdmin = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d: { passkey: string }) =>
-    z.object({ passkey: z.string().min(1).max(64) }).parse(d),
+  .inputValidator((d: { passkey: string; sectionId?: string | null }) =>
+    z
+      .object({
+        passkey: z.string().min(1).max(64),
+        sectionId: nullableSectionId.optional(),
+      })
+      .parse(d),
   )
-  .handler(async ({ data, context }) => unlockWithPasskey(context.userId, data.passkey));
+  .handler(async ({ data, context }) =>
+    unlockWithPasskey(context.userId, data.passkey, data.sectionId ?? null),
+  );
 
 export const getMyAccess = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
@@ -39,12 +113,6 @@ export const getMyAccess = createServerFn({ method: "GET" })
         : sections.filter((s) => access.sectionIds.includes(s.id)),
     };
   });
-
-export const getSections = createServerFn({ method: "GET" })
-  .middleware([requireSupabaseAuth])
-  .handler(async () => listPublicSections());
-
-/* ------------------------------------------------- general admin management */
 
 export const listAllSections = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
@@ -112,36 +180,39 @@ export const changeGeneralPasskey = createServerFn({ method: "POST" })
 
 export const startSession = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d: {
-    sectionId: string;
-    courseName: string;
-    courseCode: string;
-    lat: number;
-    lng: number;
-    radius: number;
-    accuracy?: number;
-  }) =>
-    z
-      .object({
-        sectionId: z.string().uuid(),
-        courseName: z.string().trim().min(2).max(120),
-        courseCode: z.string().trim().max(40),
-        lat: z.number().min(-90).max(90),
-        lng: z.number().min(-180).max(180),
-        radius: z.number().int().min(5).max(5000),
-        accuracy: z.number().min(0).max(100000).optional(),
-      })
-      .parse(d),
+  .inputValidator(
+    (d: {
+      sectionId: string | null;
+      courseName: string;
+      courseCode: string;
+      lat: number;
+      lng: number;
+      radius: number;
+      accuracy?: number;
+    }) =>
+      z
+        .object({
+          sectionId: nullableSectionId,
+          courseName: z.string().trim().min(2).max(120),
+          courseCode: z.string().trim().max(40),
+          lat: z.number().min(-90).max(90),
+          lng: z.number().min(-180).max(180),
+          radius: z.number().int().min(5).max(5000),
+          accuracy: z.number().min(0).max(100000).optional(),
+        })
+        .parse(d),
   )
   .handler(async ({ data, context }) => {
     await assertSectionAccess(context.userId, data.sectionId);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
-    await supabaseAdmin
+    const closeQuery = supabaseAdmin
       .from("attendance_sessions")
       .update({ is_active: false, closed_at: new Date().toISOString() })
-      .eq("section_id", data.sectionId)
       .eq("is_active", true);
+    await (data.sectionId
+      ? closeQuery.eq("section_id", data.sectionId)
+      : closeQuery.is("section_id", null));
 
     const { data: session, error } = await supabaseAdmin
       .from("attendance_sessions")
@@ -164,8 +235,8 @@ export const startSession = createServerFn({ method: "POST" })
 
 export const getLiveSession = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d: { sectionId: string }) =>
-    z.object({ sectionId: z.string().uuid() }).parse(d),
+  .inputValidator((d: { sectionId: string | null }) =>
+    z.object({ sectionId: nullableSectionId }).parse(d),
   )
   .handler(async ({ data, context }) => {
     await assertSectionAccess(context.userId, data.sectionId);
@@ -175,40 +246,34 @@ export const getLiveSession = createServerFn({ method: "POST" })
     return { session, code };
   });
 
-/** Student-facing: location + radius only, never the code. */
-export const getSectionSession = createServerFn({ method: "POST" })
+/** Student-facing: their department's session plus any General session, with the live code. */
+export const getMySessions = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d: { sectionId: string }) =>
-    z.object({ sectionId: z.string().uuid() }).parse(d),
-  )
-  .handler(async ({ data }) => {
-    const session = await getActiveSessionForSection(data.sectionId);
-    if (!session) return { session: null };
-    return {
-      session: {
-        id: session.id,
-        course_name: session.course_name,
-        course_code: session.course_code,
-        lat: session.lat,
-        lng: session.lng,
-        radius_m: session.radius_m,
-        started_at: session.started_at,
-      },
-    };
+  .handler(async ({ context }) => {
+    const sectionId = await studentSectionId(context.userId);
+    const sessions = await listStudentSessions(sectionId);
+    return { sectionId, sessions };
   });
 
 export const updateSessionSettings = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d: { sessionId: string; sectionId: string; radius: number; lat?: number; lng?: number }) =>
-    z
-      .object({
-        sessionId: z.string().uuid(),
-        sectionId: z.string().uuid(),
-        radius: z.number().int().min(5).max(5000),
-        lat: z.number().min(-90).max(90).optional(),
-        lng: z.number().min(-180).max(180).optional(),
-      })
-      .parse(d),
+  .inputValidator(
+    (d: {
+      sessionId: string;
+      sectionId: string | null;
+      radius: number;
+      lat?: number;
+      lng?: number;
+    }) =>
+      z
+        .object({
+          sessionId: z.string().uuid(),
+          sectionId: nullableSectionId,
+          radius: z.number().int().min(5).max(5000),
+          lat: z.number().min(-90).max(90).optional(),
+          lng: z.number().min(-180).max(180).optional(),
+        })
+        .parse(d),
   )
   .handler(async ({ data, context }) => {
     await assertSectionAccess(context.userId, data.sectionId);
@@ -221,8 +286,7 @@ export const updateSessionSettings = createServerFn({ method: "POST" })
           ? { radius_m: data.radius, lat, lng }
           : { radius_m: data.radius },
       )
-      .eq("id", data.sessionId)
-      .eq("section_id", data.sectionId);
+      .eq("id", data.sessionId);
     return { ok: true as const };
   });
 
@@ -230,7 +294,7 @@ export const markAttendance = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator(
     (d: {
-      sectionId: string;
+      sessionId: string;
       fullName: string;
       code: string;
       lat: number;
@@ -239,7 +303,7 @@ export const markAttendance = createServerFn({ method: "POST" })
     }) =>
       z
         .object({
-          sectionId: z.string().uuid(),
+          sessionId: z.string().uuid(),
           fullName: z.string().trim().min(3).max(80),
           code: z.string().trim().min(4).max(12),
           lat: z.number().min(-90).max(90),
@@ -248,22 +312,24 @@ export const markAttendance = createServerFn({ method: "POST" })
         })
         .parse(d),
   )
-  .handler(async ({ data, context }) =>
-    verifyAndMark(
+  .handler(async ({ data, context }) => {
+    const sectionId = await studentSectionId(context.userId);
+    return verifyAndMark(
       context.userId,
-      data.sectionId,
+      sectionId,
+      data.sessionId,
       data.fullName,
       data.code,
       data.lat,
       data.lng,
       data.accuracy,
-    ),
-  );
+    );
+  });
 
 export const closeSession = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d: { sessionId: string; sectionId: string }) =>
-    z.object({ sessionId: z.string().uuid(), sectionId: z.string().uuid() }).parse(d),
+  .inputValidator((d: { sessionId: string; sectionId: string | null }) =>
+    z.object({ sessionId: z.string().uuid(), sectionId: nullableSectionId }).parse(d),
   )
   .handler(async ({ data, context }) => {
     await assertSectionAccess(context.userId, data.sectionId);
@@ -271,10 +337,11 @@ export const closeSession = createServerFn({ method: "POST" })
     await supabaseAdmin
       .from("attendance_sessions")
       .update({ is_active: false, closed_at: new Date().toISOString() })
-      .eq("id", data.sessionId)
-      .eq("section_id", data.sectionId);
+      .eq("id", data.sessionId);
     return buildReport(data.sessionId);
   });
+
+/* --------------------------------------------------------------- reports */
 
 export const getSessionHistory = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
@@ -283,22 +350,37 @@ export const getSessionHistory = createServerFn({ method: "GET" })
     return listSessionHistory(access);
   });
 
+async function assertReportAccess(userId: string, sessionId: string) {
+  const access = await getAccess(userId);
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { data: row } = await supabaseAdmin
+    .from("attendance_sessions")
+    .select("section_id")
+    .eq("id", sessionId)
+    .maybeSingle();
+  if (!row) throw new Error("Session not found.");
+  if (access.general) return;
+  if (row.section_id && access.sectionIds.includes(row.section_id)) return;
+  throw new Error("You do not have access to this report.");
+}
+
 export const getReport = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: { sessionId: string }) =>
     z.object({ sessionId: z.string().uuid() }).parse(d),
   )
   .handler(async ({ data, context }) => {
-    const access = await getAccess(context.userId);
-    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { data: row } = await supabaseAdmin
-      .from("attendance_sessions")
-      .select("section_id")
-      .eq("id", data.sessionId)
-      .maybeSingle();
-    if (!row) throw new Error("Session not found.");
-    if (!access.general && !(row.section_id && access.sectionIds.includes(row.section_id))) {
-      throw new Error("You do not have access to this report.");
-    }
+    await assertReportAccess(context.userId, data.sessionId);
     return buildReport(data.sessionId);
+  });
+
+export const deleteReport = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d: { sessionId: string }) =>
+    z.object({ sessionId: z.string().uuid() }).parse(d),
+  )
+  .handler(async ({ data, context }) => {
+    await assertReportAccess(context.userId, data.sessionId);
+    await deleteSessionCompletely(data.sessionId);
+    return { ok: true as const };
   });
