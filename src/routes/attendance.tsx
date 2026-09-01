@@ -99,9 +99,18 @@ function AttendanceScreen() {
 
   async function submit() {
     if (!session) return;
-    if (!nameValid) return toast.error("Enter your full name first.");
-    if (!coords) return toast.error("Turn on location and wait for a GPS fix.");
-    if (!inside) return toast.error("Move closer to the attendance area to verify.");
+    if (!nameValid) {
+      toast.error("Enter your full name first.");
+      return;
+    }
+    if (!coords) {
+      toast.error("Turn on location and wait for a GPS fix.");
+      return;
+    }
+    if (!inside) {
+      toast.error("Move closer to the attendance area to verify.");
+      return;
+    }
     setBusy(true);
     try {
       const res = await mark({
