@@ -1,4 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
+import { useServerFn } from "@tanstack/react-start";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { z } from "zod";
@@ -7,8 +9,8 @@ import { AppLogo } from "@/components/AppLogo";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { lovable } from "@/integrations/lovable/index";
 import { supabase } from "@/integrations/supabase/client";
+import { listDepartments } from "@/lib/attendance.functions";
 import { useAuth } from "@/hooks/useAuth";
 
 export const Route = createFileRoute("/auth")({
@@ -17,12 +19,13 @@ export const Route = createFileRoute("/auth")({
       { title: "Sign in — Smart Attendance" },
       {
         name: "description",
-        content: "Sign in or create your Smart Attendance account with Google or email.",
+        content:
+          "Sign in with your email and password, or create an account with your name and department.",
       },
       { property: "og:title", content: "Sign in — Smart Attendance" },
       {
         property: "og:description",
-        content: "Sign in or create your Smart Attendance account with Google or email.",
+        content: "Sign in with email and password, or register with your department.",
       },
     ],
   }),
@@ -31,9 +34,9 @@ export const Route = createFileRoute("/auth")({
 
 const signUpSchema = z.object({
   fullName: z.string().trim().min(2, "Enter your full name").max(80),
-  matricNo: z.string().trim().min(2, "Enter your matric number").max(40),
   email: z.string().trim().email("Enter a valid email").max(255),
   password: z.string().min(6, "Password must be at least 6 characters").max(72),
+  sectionId: z.string().uuid("Choose your department"),
 });
 
 const signInSchema = z.object({
@@ -44,15 +47,21 @@ const signInSchema = z.object({
 function AuthScreen() {
   const navigate = useNavigate();
   const { session } = useAuth();
+  const departmentsFn = useServerFn(listDepartments);
   const [mode, setMode] = useState<"in" | "up">("in");
   const [busy, setBusy] = useState(false);
-  const [form, setForm] = useState({ fullName: "", matricNo: "", email: "", password: "" });
+  const [form, setForm] = useState({ fullName: "", email: "", password: "", sectionId: "" });
+
+  const { data: departments } = useQuery({
+    queryKey: ["departments-public"],
+    queryFn: () => departmentsFn(),
+  });
 
   useEffect(() => {
     if (session) navigate({ to: "/home", replace: true });
   }, [session, navigate]);
 
-  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) =>
+  const set = (k: "fullName" | "email" | "password") => (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm((f) => ({ ...f, [k]: e.target.value }));
 
   async function onSubmit(e: React.FormEvent) {
@@ -70,11 +79,14 @@ function AuthScreen() {
           password: parsed.data.password,
           options: {
             emailRedirectTo: window.location.origin,
-            data: { full_name: parsed.data.fullName, matric_no: parsed.data.matricNo },
+            data: {
+              full_name: parsed.data.fullName,
+              section_id: parsed.data.sectionId,
+            },
           },
         });
         if (error) throw error;
-        toast.success("Account created");
+        toast.success("Account created — check your email if confirmation is required.");
       } else {
         const parsed = signInSchema.safeParse(form);
         if (!parsed.success) {
@@ -94,22 +106,8 @@ function AuthScreen() {
     }
   }
 
-  async function google() {
-    setBusy(true);
-    const result = await lovable.auth.signInWithOAuth("google", {
-      redirect_uri: window.location.origin,
-    });
-    if (result.error) {
-      setBusy(false);
-      toast.error("Google sign-in failed. Try email instead.");
-      return;
-    }
-    if (result.redirected) return;
-    navigate({ to: "/home", replace: true });
-  }
-
   return (
-    <main className="flex min-h-[100dvh] flex-col px-6 pt-14 safe-bottom">
+    <main className="mx-auto flex min-h-[100dvh] w-full max-w-md flex-col px-6 pt-14 safe-bottom">
       <div className="animate-rise flex flex-col items-center">
         <AppLogo size={68} className="shadow-float" />
         <h1 className="mt-5 text-2xl font-semibold tracking-tight">
@@ -117,8 +115,8 @@ function AuthScreen() {
         </h1>
         <p className="mt-1 text-center text-sm text-muted-foreground">
           {mode === "in"
-            ? "Sign in to mark or manage attendance"
-            : "Join with your name and matric number"}
+            ? "Sign in with your email and password"
+            : "Join with your name, email and department"}
         </p>
       </div>
 
@@ -128,26 +126,15 @@ function AuthScreen() {
         style={{ animationDelay: "80ms" }}
       >
         {mode === "up" ? (
-          <>
-            <Field label="Full name">
-              <Input
-                value={form.fullName}
-                onChange={set("fullName")}
-                placeholder="Promise Alaofin"
-                maxLength={80}
-                className="h-12 rounded-xl"
-              />
-            </Field>
-            <Field label="Matric number">
-              <Input
-                value={form.matricNo}
-                onChange={set("matricNo")}
-                placeholder="FEM/2026/001"
-                maxLength={40}
-                className="h-12 rounded-xl"
-              />
-            </Field>
-          </>
+          <Field label="Full name">
+            <Input
+              value={form.fullName}
+              onChange={set("fullName")}
+              placeholder="Promise Alaofin"
+              maxLength={80}
+              className="h-12 rounded-xl"
+            />
+          </Field>
         ) : null}
 
         <Field label="Email">
@@ -174,28 +161,36 @@ function AuthScreen() {
           />
         </Field>
 
+        {mode === "up" ? (
+          <Field label="Department / Section">
+            <div className="grid gap-2">
+              {(departments ?? []).map((d) => (
+                <button
+                  key={d.id}
+                  type="button"
+                  onClick={() => setForm((f) => ({ ...f, sectionId: d.id }))}
+                  className={`tap-scale rounded-xl px-4 py-3 text-left text-sm font-medium transition-colors ${
+                    form.sectionId === d.id
+                      ? "bg-gradient-primary text-primary-foreground shadow-float"
+                      : "bg-secondary text-muted-foreground"
+                  }`}
+                >
+                  {d.name}
+                </button>
+              ))}
+              {!departments?.length ? (
+                <p className="text-xs text-muted-foreground">Loading departments…</p>
+              ) : null}
+            </div>
+          </Field>
+        ) : null}
+
         <Button
           type="submit"
           disabled={busy}
           className="tap-scale mt-2 h-12 w-full rounded-xl bg-gradient-primary text-base font-semibold text-primary-foreground shadow-float hover:opacity-95"
         >
           {busy ? "Please wait…" : mode === "in" ? "Sign in" : "Create account"}
-        </Button>
-
-        <div className="flex items-center gap-3 py-1">
-          <span className="h-px flex-1 bg-border" />
-          <span className="text-xs text-muted-foreground">or</span>
-          <span className="h-px flex-1 bg-border" />
-        </div>
-
-        <Button
-          type="button"
-          variant="outline"
-          disabled={busy}
-          onClick={google}
-          className="tap-scale h-12 w-full rounded-xl text-base font-medium"
-        >
-          Continue with Google
         </Button>
       </form>
 
