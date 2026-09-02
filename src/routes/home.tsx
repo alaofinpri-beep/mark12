@@ -42,7 +42,7 @@ function Home() {
     queryFn: async () => {
       const { data } = await supabase
         .from("profiles")
-        .select("full_name, matric_no")
+        .select("full_name, section_id, sections(name)")
         .eq("id", user!.id)
         .maybeSingle();
       return data;
