@@ -42,7 +42,7 @@ function Home() {
     queryFn: async () => {
       const { data } = await supabase
         .from("profiles")
-        .select("full_name, matric_no")
+        .select("full_name, section_id, sections(name)")
         .eq("id", user!.id)
         .maybeSingle();
       return data;
@@ -100,8 +100,8 @@ function Home() {
         <p className="mt-1 truncate text-xl font-semibold">
           {active ? active.course_name : "Waiting for your lecturer"}
         </p>
-        <p className="mt-0.5 text-xs opacity-85">
-          {active?.course_code ? active.course_code : profile?.matric_no || "—"}
+        <p className="mt-0.5 truncate text-xs opacity-85">
+          {active?.course_code ? active.course_code : profile?.sections?.name || "—"}
         </p>
       </section>
 
