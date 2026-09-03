@@ -77,11 +77,16 @@ export async function unlockWithPasskey(
     return { ok: true as const, role: "general" as const, section: null };
   }
 
-  const { data: sections } = await supabaseAdmin.from("sections").select("id, name, passkey");
+  const { data: sections } = await supabaseAdmin
+    .from("sections")
+    .select("id, name, passkey, is_disabled");
   const match = (sections ?? []).find(
     (s) => s.passkey.trim().toUpperCase() === passkey.toUpperCase(),
   );
   if (!match) return { ok: false as const, reason: "Incorrect passkey." };
+  if (match.is_disabled) {
+    return { ok: false as const, reason: "This section admin has been disabled." };
+  }
   if (targetSectionId && targetSectionId !== match.id) {
     return { ok: false as const, reason: "That passkey belongs to a different department." };
   }
@@ -109,7 +114,7 @@ export async function unlockWithPasskey(
 export async function listSections(): Promise<Section[]> {
   const { data } = await supabaseAdmin
     .from("sections")
-    .select("id, name, passkey, created_at")
+    .select("id, name, passkey, created_at, is_disabled")
     .order("created_at", { ascending: true });
   return data ?? [];
 }
