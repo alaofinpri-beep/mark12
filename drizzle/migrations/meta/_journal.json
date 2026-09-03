@@ -8,6 +8,13 @@
       "when": 1788074624464,
       "tag": "0000_add_profile_department",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1788396342706,
+      "tag": "0001_add_section_disabled",
+      "breakpoints": true
     }
   ]
 }
