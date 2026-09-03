@@ -17,6 +17,7 @@ import {
   listSessionHistory,
   listStudentSessions,
   setGeneralPasskey,
+  setSectionDisabled,
   unlockWithPasskey,
   updateSection,
   verifyAndMark,
@@ -153,6 +154,17 @@ export const editSection = createServerFn({ method: "POST" })
     if (data.name) patch.name = data.name;
     if (data.passkey) patch.passkey = data.passkey;
     await updateSection(data.id, patch);
+    return { ok: true as const };
+  });
+
+export const toggleSectionDisabled = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d: { id: string; disabled: boolean }) =>
+    z.object({ id: z.string().uuid(), disabled: z.boolean() }).parse(d),
+  )
+  .handler(async ({ data, context }) => {
+    await assertGeneral(context.userId);
+    await setSectionDisabled(data.id, data.disabled);
     return { ok: true as const };
   });
 

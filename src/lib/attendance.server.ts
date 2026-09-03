@@ -1,7 +1,13 @@
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { CODE_TTL_MS, haversineMeters } from "./geo";
 
-export type Section = { id: string; name: string; passkey: string; created_at: string };
+export type Section = {
+  id: string;
+  name: string;
+  passkey: string;
+  created_at: string;
+  is_disabled: boolean;
+};
 export type PublicSection = { id: string; name: string };
 
 export type Access = { general: boolean; sectionIds: string[] };
@@ -141,6 +147,14 @@ export async function createSection(name: string, passkey: string) {
     );
   }
   return data;
+}
+
+export async function setSectionDisabled(id: string, disabled: boolean) {
+  const { error } = await supabaseAdmin
+    .from("sections")
+    .update({ is_disabled: disabled })
+    .eq("id", id);
+  if (error) throw new Error("Could not update that section admin.");
 }
 
 export async function updateSection(id: string, patch: { name?: string; passkey?: string }) {
