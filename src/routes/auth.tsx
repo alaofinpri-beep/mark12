@@ -74,7 +74,7 @@ function AuthScreen() {
           toast.error(parsed.error.issues[0]?.message ?? "Check your details");
           return;
         }
-        const { error } = await supabase.auth.signUp({
+        const { data: signUpData, error } = await supabase.auth.signUp({
           email: parsed.data.email,
           password: parsed.data.password,
           options: {
@@ -86,7 +86,18 @@ function AuthScreen() {
           },
         });
         if (error) throw error;
-        toast.success("Account created — check your email if confirmation is required.");
+
+        // Sign in immediately — never wait on email confirmation.
+        if (!signUpData.session) {
+          const { error: signInError } = await supabase.auth.signInWithPassword({
+            email: parsed.data.email,
+            password: parsed.data.password,
+          });
+          if (signInError) throw signInError;
+        }
+
+        toast.success("Account created successfully! Welcome to SLT Attendance.");
+        navigate({ to: "/home", replace: true });
       } else {
         const parsed = signInSchema.safeParse(form);
         if (!parsed.success) {
