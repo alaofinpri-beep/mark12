@@ -1,17 +1,21 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ArrowLeft,
   Check,
   ChevronRight,
   Copy,
+  Eye,
+  EyeOff,
   KeyRound,
   Loader2,
   MapPin,
   Pencil,
   Plus,
+  Power,
+  PowerOff,
   ShieldCheck,
   Trash2,
   Users,
@@ -32,11 +36,12 @@ import {
   deleteReport,
   editSection,
   getLiveSession,
-  getMyAccess,
   getReport,
   getSections,
   getSessionHistory,
+  listAllSections,
   removeSection,
+  toggleSectionDisabled,
   startSession,
   unlockAdmin,
   updateSessionSettings,
