@@ -72,43 +72,40 @@ export const Route = createFileRoute("/admin")({
 function AdminScreen() {
   const navigate = useNavigate();
   const { user, loading } = useAuth();
-  const accessFn = useServerFn(getMyAccess);
   const sectionsFn = useServerFn(getSections);
   const unlock = useServerFn(unlockAdmin);
 
+  const [view, setView] = useState<"cards" | "general">("cards");
   const [target, setTarget] = useState<Target | null>(null);
-  const [manage, setManage] = useState(false);
   const [pending, setPending] = useState<Target | null>(null);
   const [passkey, setPasskey] = useState("");
+  const [showKey, setShowKey] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Unlocks only last for this visit — every card asks for its own passkey.
+  const [unlockedNow, setUnlockedNow] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!loading && !user) navigate({ to: "/auth", replace: true });
   }, [loading, user, navigate]);
 
-  const { data: access, refetch: refetchAccess } = useQuery({
-    queryKey: ["my-access"],
-    enabled: !!user,
-    queryFn: () => accessFn(),
-  });
   const { data: sections } = useQuery({
     queryKey: ["all-sections"],
     enabled: !!user,
     queryFn: () => sectionsFn(),
   });
 
-  const unlocked = useMemo(() => {
-    const ids = new Set((access?.sections ?? []).map((s) => s.id));
-    return { general: !!access?.general, ids };
-  }, [access]);
+  const generalUnlocked = unlockedNow.has("general");
 
   function open(t: Target) {
-    if (t.id === null ? unlocked.general : unlocked.ids.has(t.id) || unlocked.general) {
-      setTarget(t);
-    } else {
-      setPending(t);
-      setPasskey("");
+    const key = t.id ?? "general";
+    if (unlockedNow.has(key)) {
+      if (t.id === null) setView("general");
+      else setTarget(t);
+      return;
     }
+    setPending(t);
+    setPasskey("");
+    setShowKey(false);
   }
 
   async function submitPasskey() {
@@ -120,8 +117,14 @@ function AdminScreen() {
         toast.error(res.reason);
         return;
       }
-      await refetchAccess();
-      setTarget(pending);
+      if (pending.id === null && res.role !== "general") {
+        toast.error("That is not the General Admin passkey.");
+        return;
+      }
+      const key = pending.id ?? "general";
+      setUnlockedNow((prev) => new Set(prev).add(key));
+      if (pending.id === null) setView("general");
+      else setTarget(pending);
       setPending(null);
       toast.success("Dashboard unlocked");
     } catch {
@@ -131,13 +134,20 @@ function AdminScreen() {
     }
   }
 
-  if (manage) return <ManageSections onBack={() => setManage(false)} />;
   if (target)
     return (
       <SectionDashboard
         target={target}
         onBack={() => setTarget(null)}
-        general={unlocked.general}
+        general={target.id === null}
+      />
+    );
+
+  if (view === "general" && generalUnlocked)
+    return (
+      <GeneralDashboard
+        onBack={() => setView("cards")}
+        onRunAttendance={() => setTarget({ id: null, name: GENERAL_NAME })}
       />
     );
 
@@ -149,21 +159,31 @@ function AdminScreen() {
             <KeyRound className="size-5" />
           </span>
           <p className="mt-3 font-semibold">{pending.name}</p>
-          <p className="text-xs text-muted-foreground">Enter the passkey to unlock.</p>
-          <Input
-            value={passkey}
-            onChange={(e) => setPasskey(e.target.value)}
-            placeholder="Passkey"
-            type="password"
-            className="mt-3 h-12 rounded-xl text-center tracking-[0.25em]"
-            onKeyDown={(e) => e.key === "Enter" && submitPasskey()}
-          />
-          <div className="mt-3 grid grid-cols-2 gap-2">
-            <Button
-              variant="outline"
-              className="h-11 rounded-xl"
-              onClick={() => setPending(null)}
+          <p className="text-xs text-muted-foreground">
+            {pending.id === null
+              ? "Enter the General Admin passkey."
+              : "Enter this section admin's passkey."}
+          </p>
+          <div className="relative mt-3">
+            <Input
+              value={passkey}
+              onChange={(e) => setPasskey(e.target.value)}
+              placeholder="Passkey"
+              type={showKey ? "text" : "password"}
+              className="h-12 rounded-xl pr-12 text-center tracking-[0.25em]"
+              onKeyDown={(e) => e.key === "Enter" && submitPasskey()}
+            />
+            <button
+              type="button"
+              onClick={() => setShowKey((v) => !v)}
+              aria-label={showKey ? "Hide passkey" : "Show passkey"}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground"
             >
+              {showKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+            </button>
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <Button variant="outline" className="h-11 rounded-xl" onClick={() => setPending(null)}>
               Cancel
             </Button>
             <Button
@@ -183,16 +203,14 @@ function AdminScreen() {
           <Card
             key={s.id}
             title={s.name}
-            subtitle={
-              unlocked.general || unlocked.ids.has(s.id) ? "Unlocked" : "Passkey required"
-            }
-            unlockedState={unlocked.general || unlocked.ids.has(s.id)}
+            subtitle={unlockedNow.has(s.id) ? "Unlocked" : "Passkey required"}
+            unlockedState={unlockedNow.has(s.id)}
             onClick={() => open({ id: s.id, name: s.name })}
           />
         ))}
         {!sections?.length ? (
           <p className="rounded-2xl bg-card p-4 text-sm text-muted-foreground shadow-card">
-            No departments yet.
+            No section admins yet.
           </p>
         ) : null}
       </section>
@@ -201,25 +219,127 @@ function AdminScreen() {
         <p className="px-1 text-xs font-medium text-muted-foreground">General admin</p>
         <Card
           title="General Admin"
-          subtitle={
-            unlocked.general ? "Unlocked · attendance visible to all students" : "Passkey required"
-          }
-          unlockedState={unlocked.general}
-          onClick={() => open({ id: null, name: GENERAL_NAME })}
+          subtitle={generalUnlocked ? "Unlocked" : "Secure passkey required"}
+          unlockedState={generalUnlocked}
+          onClick={() => open({ id: null, name: "General Admin" })}
         />
-        {unlocked.general ? (
-          <>
-            <Card
-              title="Manage departments & passkeys"
-              subtitle="Create, rename, re-key or delete section admins"
-              unlockedState
-              onClick={() => setManage(true)}
-            />
-            <div className="rounded-3xl bg-card p-4 shadow-card">
-              <AdminLogoUploader />
-            </div>
-          </>
-        ) : null}
+      </section>
+    </Shell>
+  );
+}
+
+/* --------------------------------------------------- general admin console */
+
+function GeneralDashboard({
+  onBack,
+  onRunAttendance,
+}: {
+  onBack: () => void;
+  onRunAttendance: () => void;
+}) {
+  const [panel, setPanel] = useState<"home" | "admins" | "branding" | "security">("home");
+
+  if (panel === "admins") return <ManageSections onBack={() => setPanel("home")} />;
+  if (panel === "branding")
+    return (
+      <Shell title="App branding" onBack={() => setPanel("home")}>
+        <AdminLogoUploader />
+      </Shell>
+    );
+  if (panel === "security") return <GeneralSecurity onBack={() => setPanel("home")} />;
+
+  return (
+    <Shell title="General Admin" onBack={onBack}>
+      <section className="mt-5 space-y-2">
+        <Card
+          title="Admin & department management"
+          subtitle="Create, edit, disable or delete section admins"
+          unlockedState
+          onClick={() => setPanel("admins")}
+        />
+        <Card
+          title="App branding"
+          subtitle="App name, logo and icon"
+          unlockedState
+          onClick={() => setPanel("branding")}
+        />
+        <Card
+          title="General Admin passkey"
+          subtitle="Change your own secure passkey"
+          unlockedState
+          onClick={() => setPanel("security")}
+        />
+        <Card
+          title="Run General attendance"
+          subtitle="Session visible to every registered student"
+          unlockedState
+          onClick={onRunAttendance}
+        />
+      </section>
+    </Shell>
+  );
+}
+
+function GeneralSecurity({ onBack }: { onBack: () => void }) {
+  const generalKey = useServerFn(changeGeneralPasskey);
+  const [genKey, setGenKey] = useState("");
+  const [confirmKey, setConfirmKey] = useState("");
+  const [show, setShow] = useState(false);
+
+  return (
+    <Shell title="General Admin passkey" onBack={onBack}>
+      <section className="animate-rise mt-5 space-y-3 rounded-3xl bg-card p-5 shadow-card">
+        <p className="font-semibold">Change passkey</p>
+        <p className="text-xs text-muted-foreground">
+          Minimum 4 characters. Everyone using the old passkey loses General access.
+        </p>
+        <div className="relative">
+          <Input
+            value={genKey}
+            onChange={(e) => setGenKey(e.target.value.toUpperCase())}
+            placeholder="New general passkey"
+            type={show ? "text" : "password"}
+            className="h-11 rounded-xl pr-12"
+          />
+          <button
+            type="button"
+            onClick={() => setShow((v) => !v)}
+            aria-label={show ? "Hide passkey" : "Show passkey"}
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground"
+          >
+            {show ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+          </button>
+        </div>
+        <Input
+          value={confirmKey}
+          onChange={(e) => setConfirmKey(e.target.value.toUpperCase())}
+          placeholder="Confirm new passkey"
+          type={show ? "text" : "password"}
+          className="h-11 rounded-xl"
+        />
+        <Button
+          className="tap-scale h-11 w-full rounded-xl bg-gradient-primary font-semibold text-primary-foreground shadow-float"
+          onClick={async () => {
+            if (genKey.trim().length < 4) {
+              toast.error("Use at least 4 characters.");
+              return;
+            }
+            if (genKey.trim() !== confirmKey.trim()) {
+              toast.error("The two passkeys do not match.");
+              return;
+            }
+            try {
+              await generalKey({ data: { passkey: genKey.trim() } });
+              setGenKey("");
+              setConfirmKey("");
+              toast.success("General passkey updated");
+            } catch {
+              toast.error("Could not update the passkey.");
+            }
+          }}
+        >
+          Update general passkey
+        </Button>
       </section>
     </Shell>
   );
@@ -229,28 +349,32 @@ function AdminScreen() {
 
 function ManageSections({ onBack }: { onBack: () => void }) {
   const qc = useQueryClient();
-  const listFn = useServerFn(getSections);
+  const listFn = useServerFn(listAllSections);
   const add = useServerFn(addSection);
   const edit = useServerFn(editSection);
   const remove = useServerFn(removeSection);
-  const generalKey = useServerFn(changeGeneralPasskey);
+  const toggle = useServerFn(toggleSectionDisabled);
 
   const [name, setName] = useState("");
   const [key, setKey] = useState("");
-  const [genKey, setGenKey] = useState("");
+  const [showNew, setShowNew] = useState(false);
+  const [revealed, setRevealed] = useState<Set<string>>(new Set());
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draftKey, setDraftKey] = useState("");
 
   const { data: sections, refetch } = useQuery({
-    queryKey: ["all-sections"],
+    queryKey: ["managed-sections"],
     queryFn: () => listFn(),
   });
 
   async function refresh() {
     await refetch();
+    await qc.invalidateQueries({ queryKey: ["all-sections"] });
     await qc.invalidateQueries({ queryKey: ["my-access"] });
   }
 
   return (
-    <Shell title="Departments & passkeys" onBack={onBack}>
+    <Shell title="Admins & departments" onBack={onBack}>
       <section className="animate-rise mt-5 space-y-3 rounded-3xl bg-card p-5 shadow-card">
         <p className="font-semibold">Create a section admin</p>
         <div>
@@ -264,111 +388,195 @@ function ManageSections({ onBack }: { onBack: () => void }) {
         </div>
         <div>
           <Label className="text-xs text-muted-foreground">Passkey</Label>
-          <Input
-            value={key}
-            onChange={(e) => setKey(e.target.value.toUpperCase())}
-            placeholder="CHM300"
-            className="mt-1 h-11 rounded-xl"
-          />
+          <div className="relative mt-1">
+            <Input
+              value={key}
+              onChange={(e) => setKey(e.target.value.toUpperCase())}
+              placeholder="CHM300"
+              type={showNew ? "text" : "password"}
+              className="h-11 rounded-xl pr-12"
+            />
+            <button
+              type="button"
+              onClick={() => setShowNew((v) => !v)}
+              aria-label={showNew ? "Hide passkey" : "Show passkey"}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground"
+            >
+              {showNew ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+            </button>
+          </div>
         </div>
         <Button
           className="tap-scale h-11 w-full rounded-xl bg-gradient-primary font-semibold text-primary-foreground shadow-float"
           onClick={async () => {
+            if (name.trim().length < 2 || key.trim().length < 4) {
+              toast.error("Enter a name and a passkey of at least 4 characters.");
+              return;
+            }
             try {
               await add({ data: { name: name.trim(), passkey: key.trim() } });
               setName("");
               setKey("");
               await refresh();
-              toast.success("Department created");
+              toast.success("Section admin created");
             } catch {
-              toast.error("Could not create that department.");
+              toast.error("Could not create that section admin.");
             }
           }}
         >
-          <Plus className="size-4" /> Create department
+          <Plus className="size-4" /> Create section admin
         </Button>
-      </section>
-
-      <section className="animate-rise mt-4 space-y-2 rounded-3xl bg-card p-5 shadow-card">
-        <p className="font-semibold">Existing departments</p>
-        {(sections ?? []).map((s) => (
-          <div key={s.id} className="rounded-2xl bg-secondary p-3">
-            <p className="truncate text-sm font-medium">{s.name}</p>
-            <div className="mt-2 grid grid-cols-3 gap-2">
-              <Button
-                variant="outline"
-                className="h-9 rounded-lg text-xs"
-                onClick={async () => {
-                  const next = prompt("New department name", s.name);
-                  if (!next) return;
-                  await edit({ data: { id: s.id, name: next.trim() } });
-                  await refresh();
-                  toast.success("Renamed");
-                }}
-              >
-                <Pencil className="size-3.5" /> Rename
-              </Button>
-              <Button
-                variant="outline"
-                className="h-9 rounded-lg text-xs"
-                onClick={async () => {
-                  const next = prompt("New passkey for " + s.name);
-                  if (!next) return;
-                  await edit({ data: { id: s.id, passkey: next.trim() } });
-                  await refresh();
-                  toast.success("Passkey updated");
-                }}
-              >
-                <KeyRound className="size-3.5" /> Passkey
-              </Button>
-              <Button
-                variant="outline"
-                className="h-9 rounded-lg text-xs text-destructive"
-                onClick={async () => {
-                  if (!confirm(`Delete ${s.name}? Its admins lose access.`)) return;
-                  try {
-                    await remove({ data: { id: s.id } });
-                    await refresh();
-                    toast.success("Deleted");
-                  } catch {
-                    toast.error("Could not delete — it still has attendance data.");
-                  }
-                }}
-              >
-                <Trash2 className="size-3.5" /> Delete
-              </Button>
-            </div>
-          </div>
-        ))}
       </section>
 
       <section className="animate-rise mt-4 space-y-3 rounded-3xl bg-card p-5 shadow-card">
-        <p className="font-semibold">General admin passkey</p>
-        <Input
-          value={genKey}
-          onChange={(e) => setGenKey(e.target.value.toUpperCase())}
-          placeholder="New general passkey"
-          className="h-11 rounded-xl"
-        />
-        <Button
-          variant="outline"
-          className="h-11 w-full rounded-xl"
-          onClick={async () => {
-            try {
-              await generalKey({ data: { passkey: genKey.trim() } });
-              setGenKey("");
-              toast.success("General passkey updated");
-            } catch {
-              toast.error("Could not update the passkey.");
-            }
-          }}
-        >
-          Update general passkey
-        </Button>
+        <p className="font-semibold">Section admins & passkeys</p>
+        {(sections ?? []).map((s) => {
+          const isOpen = revealed.has(s.id);
+          return (
+            <div key={s.id} className="rounded-2xl bg-secondary p-3">
+              <div className="flex items-center justify-between gap-2">
+                <p className="min-w-0 truncate text-sm font-medium">{s.name}</p>
+                {s.is_disabled ? (
+                  <span className="shrink-0 rounded-full bg-destructive/10 px-2 py-0.5 text-[10px] font-semibold text-destructive">
+                    Disabled
+                  </span>
+                ) : null}
+              </div>
+
+              <div className="mt-2 flex items-center gap-2">
+                <code className="min-w-0 flex-1 truncate rounded-lg bg-background px-3 py-2 text-xs tracking-widest">
+                  {isOpen ? s.passkey : "••••••••"}
+                </code>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="size-9 shrink-0 rounded-lg"
+                  aria-label={isOpen ? "Hide passkey" : "Show passkey"}
+                  onClick={() =>
+                    setRevealed((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(s.id)) next.delete(s.id);
+                      else next.add(s.id);
+                      return next;
+                    })
+                  }
+                >
+                  {isOpen ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="size-9 shrink-0 rounded-lg"
+                  aria-label="Copy passkey"
+                  onClick={async () => {
+                    await navigator.clipboard.writeText(s.passkey);
+                    toast.success("Passkey copied");
+                  }}
+                >
+                  <Copy className="size-4" />
+                </Button>
+              </div>
+
+              {editing === s.id ? (
+                <div className="mt-2 flex items-center gap-2">
+                  <Input
+                    value={draftKey}
+                    onChange={(e) => setDraftKey(e.target.value.toUpperCase())}
+                    placeholder="New passkey"
+                    className="h-9 rounded-lg text-xs"
+                  />
+                  <Button
+                    size="icon"
+                    className="size-9 shrink-0 rounded-lg bg-gradient-primary text-primary-foreground"
+                    aria-label="Save passkey"
+                    onClick={async () => {
+                      if (draftKey.trim().length < 4) {
+                        toast.error("Use at least 4 characters.");
+                        return;
+                      }
+                      await edit({ data: { id: s.id, passkey: draftKey.trim() } });
+                      setEditing(null);
+                      setDraftKey("");
+                      await refresh();
+                      toast.success("Passkey updated");
+                    }}
+                  >
+                    <Check className="size-4" />
+                  </Button>
+                </div>
+              ) : null}
+
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                <Button
+                  variant="outline"
+                  className="h-9 rounded-lg text-xs"
+                  onClick={async () => {
+                    const next = prompt("New department name", s.name);
+                    if (!next) return;
+                    await edit({ data: { id: s.id, name: next.trim() } });
+                    await refresh();
+                    toast.success("Renamed");
+                  }}
+                >
+                  <Pencil className="size-3.5" /> Rename
+                </Button>
+                <Button
+                  variant="outline"
+                  className="h-9 rounded-lg text-xs"
+                  onClick={() => {
+                    setEditing(editing === s.id ? null : s.id);
+                    setDraftKey("");
+                  }}
+                >
+                  <KeyRound className="size-3.5" /> Change key
+                </Button>
+                <Button
+                  variant="outline"
+                  className="h-9 rounded-lg text-xs"
+                  onClick={async () => {
+                    await toggle({ data: { id: s.id, disabled: !s.is_disabled } });
+                    await refresh();
+                    toast.success(s.is_disabled ? "Enabled" : "Disabled");
+                  }}
+                >
+                  {s.is_disabled ? (
+                    <>
+                      <Power className="size-3.5" /> Enable
+                    </>
+                  ) : (
+                    <>
+                      <PowerOff className="size-3.5" /> Disable
+                    </>
+                  )}
+                </Button>
+                <Button
+                  variant="outline"
+                  className="h-9 rounded-lg text-xs text-destructive"
+                  onClick={async () => {
+                    if (!confirm(`Delete ${s.name}? Its admins lose access.`)) return;
+                    try {
+                      await remove({ data: { id: s.id } });
+                      await refresh();
+                      toast.success("Deleted");
+                    } catch {
+                      toast.error("Could not delete — it still has attendance data.");
+                    }
+                  }}
+                >
+                  <Trash2 className="size-3.5" /> Delete
+                </Button>
+              </div>
+            </div>
+          );
+        })}
+        {!sections?.length ? (
+          <p className="text-sm text-muted-foreground">No section admins yet.</p>
+        ) : null}
       </section>
     </Shell>
   );
 }
+
 
 /* ------------------------------------------------------- section console */
 
