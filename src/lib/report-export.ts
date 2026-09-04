@@ -1,15 +1,7 @@
-/** Browser-only helpers that turn the rendered A4 sheets into PDF / PNG / share. */
+/** Browser-only helpers that turn a Report into a clean A4 PDF / PNG / share file. */
 
-async function renderCanvases(pages: HTMLElement[]): Promise<HTMLCanvasElement[]> {
-  const { default: html2canvas } = await import("html2canvas-pro");
-  const out: HTMLCanvasElement[] = [];
-  for (const page of pages) {
-    out.push(
-      await html2canvas(page, { scale: 2, backgroundColor: "#ffffff", useCORS: true }),
-    );
-  }
-  return out;
-}
+import { renderReportCanvases, PAGE_W, PAGE_H } from "@/lib/report-render";
+import type { Report } from "@/lib/attendance.server";
 
 function saveBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -21,30 +13,32 @@ function saveBlob(blob: Blob, filename: string) {
 }
 
 async function toBlob(canvas: HTMLCanvasElement): Promise<Blob> {
-  return new Promise((resolve) =>
-    canvas.toBlob((b) => resolve(b ?? new Blob()), "image/png", 0.95),
-  );
+  return new Promise((resolve) => canvas.toBlob((b) => resolve(b ?? new Blob()), "image/png"));
 }
 
-export async function buildPdfBlob(pages: HTMLElement[]): Promise<Blob> {
+export async function buildPdfBlob(report: Report): Promise<Blob> {
   const { jsPDF } = await import("jspdf");
-  const canvases = await renderCanvases(pages);
-  const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
-  const w = 210;
-  const h = 297;
+  const canvases = await renderReportCanvases(report, 3);
+  const pdf = new jsPDF({ unit: "pt", format: "a4", orientation: "portrait", compress: true });
+  const pw = pdf.internal.pageSize.getWidth();
+  const ph = pdf.internal.pageSize.getHeight();
+  // Fit the A4-proportioned canvas exactly onto the A4 page.
+  const ratio = Math.min(pw / PAGE_W, ph / PAGE_H);
+  const w = PAGE_W * ratio;
+  const h = PAGE_H * ratio;
   canvases.forEach((canvas, i) => {
     if (i > 0) pdf.addPage();
-    pdf.addImage(canvas.toDataURL("image/jpeg", 0.92), "JPEG", 0, 0, w, h);
+    pdf.addImage(canvas.toDataURL("image/jpeg", 0.95), "JPEG", (pw - w) / 2, (ph - h) / 2, w, h);
   });
   return pdf.output("blob");
 }
 
-export async function downloadPdf(pages: HTMLElement[], filename: string) {
-  saveBlob(await buildPdfBlob(pages), `${filename}.pdf`);
+export async function downloadPdf(report: Report, filename: string) {
+  saveBlob(await buildPdfBlob(report), `${filename}.pdf`);
 }
 
-export async function downloadImages(pages: HTMLElement[], filename: string) {
-  const canvases = await renderCanvases(pages);
+export async function downloadImages(report: Report, filename: string) {
+  const canvases = await renderReportCanvases(report, 3);
   for (let i = 0; i < canvases.length; i++) {
     const blob = await toBlob(canvases[i]!);
     saveBlob(blob, canvases.length > 1 ? `${filename}-page-${i + 1}.png` : `${filename}.png`);
@@ -61,11 +55,11 @@ export function canShareFiles(): boolean {
 
 /** Shares the report to WhatsApp / any installed app via the OS share sheet. */
 export async function shareReport(
-  pages: HTMLElement[],
+  report: Report,
   filename: string,
   title: string,
 ): Promise<"shared" | "downloaded"> {
-  const pdf = await buildPdfBlob(pages);
+  const pdf = await buildPdfBlob(report);
   const file = new File([pdf], `${filename}.pdf`, { type: "application/pdf" });
   if (canShareFiles() && navigator.canShare({ files: [file] })) {
     await navigator.share({ files: [file], title, text: title });
