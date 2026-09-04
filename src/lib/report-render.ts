@@ -108,7 +108,7 @@ class Painter {
     ctx.fillText(t, x, baselineY);
     ctx.textAlign = "left";
   }
-  roundRect(x: number, y: number, w: number, h: number, r: number, fill: string) {
+  roundRect(x: number, y: number, w: number, h: number, r: number, fill: string | CanvasGradient) {
     const { ctx } = this;
     ctx.beginPath();
     ctx.moveTo(x + r, y);
@@ -129,10 +129,7 @@ function drawHeader(p: Painter, report: Report): number {
   const gx = p.ctx.createLinearGradient(M, M, M + badge, M + badge);
   gx.addColorStop(0, "#38bdf8");
   gx.addColorStop(1, "#0284c7");
-  p.roundRect(M, M, badge, badge, 12, "#0ea5e9");
-  p.ctx.save();
-  p.roundRect(M, M, badge, badge, 12, gx as unknown as string);
-  p.ctx.restore();
+  p.roundRect(M, M, badge, badge, 12, gx);
   p.font(20, 800);
   p.text("SLT", M + badge / 2, M + badge / 2 + 7, { maxW: badge, align: "center", color: "#ffffff" });
 
@@ -371,7 +368,6 @@ export async function renderReportCanvases(report: Report, scale = 3): Promise<H
     let y = page.top;
     if (pi === 0) {
       y = drawHeader(p, report);
-      p.rect(M, M - 14, CONTENT_W, 0, "#fff");
     } else {
       p.font(10, 800);
       p.text("STUDENT ATTENDANCE (CONTINUED)", M, y + 4, { maxW: CONTENT_W, color: "#334155" });
