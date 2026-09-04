@@ -313,7 +313,7 @@ function drawFooter(p: Painter, page: number, total: number) {
 
 function paginateRows(report: Report) {
   const rows = report.rows;
-  const firstTop = 470; // measured height of the header block
+  const firstTop = 338; // exact height of the header block above
   const nextTop = M + 8;
   const limit = FOOTER_TOP - 18;
 
