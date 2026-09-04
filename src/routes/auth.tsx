@@ -85,18 +85,33 @@ function AuthScreen() {
             },
           },
         });
-        if (error) throw error;
 
-        // Sign in immediately — never wait on email confirmation.
-        if (!signUpData.session) {
+        const already =
+          !!error && /already|exists|registered/i.test(error.message ?? "");
+        if (error && !already) throw error;
+
+        // Existing email or fresh signup — always finish by signing in.
+        if (already || !signUpData?.session) {
           const { error: signInError } = await supabase.auth.signInWithPassword({
             email: parsed.data.email,
             password: parsed.data.password,
           });
-          if (signInError) throw signInError;
+          if (signInError) {
+            toast.error(
+              already
+                ? "This email already has an account. Sign in with your password."
+                : signInError.message,
+            );
+            if (already) setMode("in");
+            return;
+          }
         }
 
-        toast.success("Account created successfully! Welcome to SLT Attendance.");
+        toast.success(
+          already
+            ? "Welcome back to SLT Attendance."
+            : "Account created successfully! Welcome to SLT Attendance.",
+        );
         navigate({ to: "/home", replace: true });
       } else {
         const parsed = signInSchema.safeParse(form);
@@ -108,7 +123,16 @@ function AuthScreen() {
           email: parsed.data.email,
           password: parsed.data.password,
         });
-        if (error) throw error;
+        if (error) {
+          toast.error(
+            /invalid login/i.test(error.message)
+              ? "Incorrect email or password."
+              : error.message,
+          );
+          return;
+        }
+        toast.success("Signed in.");
+        navigate({ to: "/home", replace: true });
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Something went wrong");

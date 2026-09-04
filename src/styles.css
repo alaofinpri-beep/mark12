@@ -11,7 +11,7 @@
  */
 
 @theme inline {
-  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-sans: "Plus Jakarta Sans", "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
   --radius-sm: calc(var(--radius) - 6px);
   --radius-md: calc(var(--radius) - 3px);
   --radius-lg: var(--radius);
@@ -56,17 +56,17 @@
 :root {
   --radius: 1.125rem;
 
-  --background: oklch(0.985 0.008 230);
-  --foreground: oklch(0.22 0.035 250);
+  --background: oklch(0.988 0.01 232);
+  --foreground: oklch(0.2 0.038 252);
 
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.22 0.035 250);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.22 0.035 250);
 
-  --primary: oklch(0.68 0.155 240);
+  --primary: oklch(0.655 0.17 243);
   --primary-foreground: oklch(0.99 0.005 230);
-  --primary-glow: oklch(0.8 0.115 215);
+  --primary-glow: oklch(0.79 0.135 212);
 
   --secondary: oklch(0.955 0.018 232);
   --secondary-foreground: oklch(0.32 0.05 250);
@@ -88,10 +88,13 @@
   --input: oklch(0.92 0.014 232);
   --ring: oklch(0.68 0.155 240);
 
-  --gradient-primary: linear-gradient(135deg, var(--primary-glow), var(--primary));
-  --gradient-sky: linear-gradient(160deg, oklch(0.97 0.03 225), oklch(0.99 0.008 230) 60%);
-  --shadow-card: 0 1px 2px oklch(0.5 0.05 250 / 0.05), 0 12px 28px -14px oklch(0.5 0.08 250 / 0.28);
-  --shadow-float: 0 18px 40px -18px oklch(0.55 0.14 245 / 0.45);
+  --gradient-primary: linear-gradient(135deg, var(--primary-glow), var(--primary) 62%, oklch(0.58 0.17 255));
+  --gradient-sky:
+    radial-gradient(120% 80% at 12% -8%, oklch(0.93 0.07 218 / 0.85), transparent 60%),
+    radial-gradient(100% 70% at 100% 0%, oklch(0.9 0.06 268 / 0.55), transparent 62%),
+    linear-gradient(180deg, oklch(0.985 0.014 228), oklch(0.995 0.005 232) 55%);
+  --shadow-card: 0 1px 2px oklch(0.5 0.05 250 / 0.05), 0 14px 32px -16px oklch(0.5 0.09 250 / 0.3);
+  --shadow-float: 0 20px 44px -18px oklch(0.55 0.15 245 / 0.48);
 
   --sidebar: oklch(0.985 0.008 230);
   --sidebar-foreground: oklch(0.22 0.035 250);
@@ -139,6 +142,7 @@
     background-attachment: fixed;
     color: var(--color-foreground);
     font-family: var(--font-sans);
+    letter-spacing: -0.011em;
     -webkit-font-smoothing: antialiased;
     overscroll-behavior-y: none;
   }

@@ -1,14 +1,11 @@
-import { useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { FileDown, Image as ImageIcon, Share2, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import { ROWS_PER_PAGE, ReportPage, paginate } from "@/components/ReportSheet";
+import { renderReportCanvases } from "@/lib/report-render";
 import { downloadImages, downloadPdf, reportFileName, shareReport } from "@/lib/report-export";
 import type { Report } from "@/lib/attendance.server";
-
-const PREVIEW_SCALE = 0.38;
-const SHEET_H = 1123;
 
 export function ReportViewer({
   report,
@@ -19,23 +16,30 @@ export function ReportViewer({
   onClose?: () => void;
   onDelete?: () => void;
 }) {
-  const holder = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const pages = paginate(report.rows);
+  const [previews, setPreviews] = useState<string[]>([]);
   const name = reportFileName(report.session.course_name, report.session.course_code);
 
-  function sheets(): HTMLElement[] {
-    return Array.from(holder.current?.querySelectorAll<HTMLElement>("[data-sheet]") ?? []);
-  }
+  // The preview shows the exact same pages that get downloaded.
+  useEffect(() => {
+    let alive = true;
+    renderReportCanvases(report, 1.5)
+      .then((canvases) => {
+        if (alive) setPreviews(canvases.map((c) => c.toDataURL("image/png")));
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [report]);
 
   async function run(kind: "pdf" | "image" | "share") {
     setBusy(kind);
     try {
-      const els = sheets();
-      if (kind === "pdf") await downloadPdf(els, name);
-      else if (kind === "image") await downloadImages(els, name);
+      if (kind === "pdf") await downloadPdf(report, name);
+      else if (kind === "image") await downloadImages(report, name);
       else {
-        const res = await shareReport(els, name, `${report.session.course_name} attendance`);
+        const res = await shareReport(report, name, `${report.session.course_name} attendance`);
         if (res === "downloaded") toast.info("Sharing unavailable — the PDF was downloaded.");
       }
       if (kind !== "share") toast.success("Report saved");
@@ -101,40 +105,19 @@ export function ReportViewer({
         </Button>
       ) : null}
 
-      {/* Live A4 preview — scaled down to fit the phone, exported at full size. */}
-      <div className="mt-4 overflow-hidden rounded-2xl border border-border bg-muted p-2">
-        <div className="max-h-[420px] overflow-y-auto">
-          <div
-            style={{
-              height: pages.length * (SHEET_H + 12) * PREVIEW_SCALE,
-              position: "relative",
-            }}
-          >
-            <div
-              ref={holder}
-              style={{
-                transform: `scale(${PREVIEW_SCALE})`,
-                transformOrigin: "top left",
-                width: 794,
-                position: "absolute",
-                top: 0,
-                left: 0,
-              }}
-            >
-              {pages.map((rows, i) => (
-                <div key={i} data-sheet className="mb-3 shadow-card">
-                  <ReportPage
-                    report={report}
-                    rows={rows}
-                    pageIndex={i}
-                    pageCount={pages.length}
-                    startNo={i * ROWS_PER_PAGE + 1}
-                  />
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
+      <div className="mt-4 max-h-[440px] overflow-y-auto rounded-2xl border border-border bg-muted p-2">
+        {previews.length ? (
+          previews.map((src, i) => (
+            <img
+              key={i}
+              src={src}
+              alt={`Attendance report page ${i + 1}`}
+              className="mb-2 w-full rounded-lg shadow-card"
+            />
+          ))
+        ) : (
+          <p className="py-10 text-center text-xs text-muted-foreground">Preparing preview…</p>
+        )}
       </div>
     </section>
   );
