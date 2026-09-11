@@ -1,5 +1,14 @@
-import { supabaseAdmin } from "@/integrations/supabase/client.server";
-import { CODE_TTL_MS, haversineMeters } from "./geo";
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+import type { Database } from "@/integrations/supabase/types";
+
+/**
+ * Every function here runs with an RLS-scoped Supabase client (the signed-in
+ * user), never a service-role client. Privileged work is delegated to
+ * SECURITY DEFINER database functions, so the app only ever needs the public
+ * Supabase keys — which is what makes it deployable anywhere (Vercel included).
+ */
+export type Db = SupabaseClient<Database>;
 
 export type Section = {
   id: string;
@@ -14,209 +23,140 @@ export type Access = { general: boolean; sectionIds: string[] };
 
 export const GENERAL_LABEL = "General (all departments)";
 
-export function generateCode(): string {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  const bytes = new Uint8Array(6);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, (b) => alphabet[b % alphabet.length]).join("");
+function rpcError(error: { message: string } | null, fallback: string): never | void {
+  if (error) throw new Error(error.message || fallback);
 }
 
 /* ---------------------------------------------------------------- access */
 
-export async function getAccess(userId: string): Promise<Access> {
-  const { data } = await supabaseAdmin
-    .from("admin_grants")
-    .select("section_id, is_general")
-    .eq("user_id", userId);
-  const rows = data ?? [];
+export async function getAccess(db: Db): Promise<Access> {
+  const { data, error } = await db.rpc("my_access");
+  rpcError(error, "Could not check your admin access.");
+  const parsed = (data ?? {}) as { general?: boolean; sectionIds?: string[] };
   return {
-    general: rows.some((r) => r.is_general),
-    sectionIds: rows.map((r) => r.section_id).filter((v): v is string => !!v),
+    general: !!parsed.general,
+    sectionIds: (parsed.sectionIds ?? []).filter((v): v is string => !!v),
   };
 }
 
-export async function assertGeneral(userId: string) {
-  const access = await getAccess(userId);
+export async function assertGeneral(db: Db) {
+  const access = await getAccess(db);
   if (!access.general) throw new Error("General Admin access required.");
   return access;
 }
 
 /** `null` sectionId means the General Admin scope. */
-export async function assertSectionAccess(userId: string, sectionId: string | null) {
-  const access = await getAccess(userId);
+export async function assertSectionAccess(db: Db, sectionId: string | null) {
+  const access = await getAccess(db);
   if (access.general) return access;
   if (sectionId && access.sectionIds.includes(sectionId)) return access;
   throw new Error("You do not have access to this department.");
 }
 
-export async function getGeneralPasskey(): Promise<string> {
-  const { data } = await supabaseAdmin
-    .from("app_settings")
-    .select("general_passkey")
-    .eq("id", 1)
-    .maybeSingle();
-  return (data?.general_passkey ?? "FEM2026").trim();
-}
-
 /** Verifies a passkey and records the matching grant for this user. */
 export async function unlockWithPasskey(
-  userId: string,
+  db: Db,
   rawPasskey: string,
   targetSectionId?: string | null,
 ) {
-  const passkey = rawPasskey.trim();
-  if (!passkey) return { ok: false as const, reason: "Enter a passkey." };
-
-  const general = await getGeneralPasskey();
-  if (passkey.toUpperCase() === general.toUpperCase()) {
-    const { data: has } = await supabaseAdmin
-      .from("admin_grants")
-      .select("id")
-      .eq("user_id", userId)
-      .eq("is_general", true)
-      .maybeSingle();
-    if (!has) {
-      await supabaseAdmin
-        .from("admin_grants")
-        .insert({ user_id: userId, is_general: true, section_id: null });
-    }
-    return { ok: true as const, role: "general" as const, section: null };
-  }
-
-  const { data: sections } = await supabaseAdmin
-    .from("sections")
-    .select("id, name, passkey, is_disabled");
-  const match = (sections ?? []).find(
-    (s) => s.passkey.trim().toUpperCase() === passkey.toUpperCase(),
-  );
-  if (!match) return { ok: false as const, reason: "Incorrect passkey." };
-  if (match.is_disabled) {
-    return { ok: false as const, reason: "This section admin has been disabled." };
-  }
-  if (targetSectionId && targetSectionId !== match.id) {
-    return { ok: false as const, reason: "That passkey belongs to a different department." };
-  }
-
-  const { data: existing } = await supabaseAdmin
-    .from("admin_grants")
-    .select("id")
-    .eq("user_id", userId)
-    .eq("section_id", match.id)
-    .maybeSingle();
-  if (!existing) {
-    await supabaseAdmin
-      .from("admin_grants")
-      .insert({ user_id: userId, section_id: match.id, is_general: false });
-  }
+  const { data, error } = await db.rpc("unlock_passkey", {
+    _passkey: rawPasskey,
+    _section: targetSectionId ?? undefined,
+  });
+  if (error) return { ok: false as const, reason: "Could not verify that passkey." };
+  const res = (data ?? {}) as {
+    ok?: boolean;
+    reason?: string;
+    role?: "general" | "section";
+    section?: { id: string; name: string } | null;
+  };
+  if (!res.ok) return { ok: false as const, reason: res.reason ?? "Incorrect passkey." };
   return {
     ok: true as const,
-    role: "section" as const,
-    section: { id: match.id, name: match.name },
+    role: res.role ?? "section",
+    section: res.section ?? null,
   };
+}
+
+export async function getGeneralPasskey(db: Db): Promise<string> {
+  const { data, error } = await db.rpc("admin_general_passkey");
+  rpcError(error, "General Admin access required.");
+  return (data as string | null)?.trim() ?? "FEM2026";
 }
 
 /* -------------------------------------------------------------- sections */
 
-export async function listSections(): Promise<Section[]> {
-  const { data } = await supabaseAdmin
-    .from("sections")
-    .select("id, name, passkey, created_at, is_disabled")
-    .order("created_at", { ascending: true });
-  return data ?? [];
+export async function listSections(db: Db): Promise<Section[]> {
+  const { data, error } = await db.rpc("admin_list_sections");
+  rpcError(error, "Could not load the departments.");
+  return (data ?? []) as Section[];
 }
 
-export async function listPublicSections(): Promise<PublicSection[]> {
-  const { data } = await supabaseAdmin
-    .from("sections")
-    .select("id, name")
-    .order("created_at", { ascending: true });
-  return data ?? [];
+export async function listPublicSections(db: Db): Promise<PublicSection[]> {
+  const { data, error } = await db.rpc("list_departments");
+  rpcError(error, "Could not load the departments.");
+  return (data ?? []) as PublicSection[];
 }
 
-export async function createSection(name: string, passkey: string) {
-  const { data, error } = await supabaseAdmin
-    .from("sections")
-    .insert({ name: name.trim(), passkey: passkey.trim() })
-    .select("id, name")
-    .single();
-  if (error || !data) {
-    throw new Error(
-      error?.code === "23505"
-        ? "A department with that name already exists."
-        : "Could not create the department.",
-    );
-  }
-  return data;
+export async function createSection(db: Db, name: string, passkey: string) {
+  const { data, error } = await db.rpc("admin_create_section", {
+    _name: name,
+    _passkey: passkey,
+  });
+  rpcError(error, "Could not create the department.");
+  return (data ?? {}) as { id: string; name: string };
 }
 
-export async function setSectionDisabled(id: string, disabled: boolean) {
-  const { error } = await supabaseAdmin
-    .from("sections")
-    .update({ is_disabled: disabled })
-    .eq("id", id);
-  if (error) throw new Error("Could not update that section admin.");
+export async function setSectionDisabled(db: Db, id: string, disabled: boolean) {
+  const { error } = await db.rpc("admin_set_section_disabled", {
+    _id: id,
+    _disabled: disabled,
+  });
+  rpcError(error, "Could not update that section admin.");
 }
 
-export async function updateSection(id: string, patch: { name?: string; passkey?: string }) {
-  const body: { name?: string; passkey?: string } = {};
-  if (patch.name) body.name = patch.name.trim();
-  if (patch.passkey) body.passkey = patch.passkey.trim();
-  if (!Object.keys(body).length) return;
-  const { error } = await supabaseAdmin.from("sections").update(body).eq("id", id);
-  if (error) throw new Error("Could not update the department.");
-  if (patch.passkey) {
-    // Existing unlocks must re-authenticate with the new passkey.
-    await supabaseAdmin.from("admin_grants").delete().eq("section_id", id);
-  }
+export async function updateSection(
+  db: Db,
+  id: string,
+  patch: { name?: string; passkey?: string },
+) {
+  if (!patch.name && !patch.passkey) return;
+  const { error } = await db.rpc("admin_update_section", {
+    _id: id,
+    _name: patch.name ?? "",
+    _passkey: patch.passkey ?? "",
+  });
+  rpcError(error, "Could not update the department.");
 }
 
-export async function deleteSection(id: string) {
-  const { error } = await supabaseAdmin.from("sections").delete().eq("id", id);
-  if (error) throw new Error("Could not delete the department.");
+export async function deleteSection(db: Db, id: string) {
+  const { error } = await db.rpc("admin_delete_section", { _id: id });
+  rpcError(error, "Could not delete the department.");
 }
 
-export async function setGeneralPasskey(passkey: string) {
-  const { error } = await supabaseAdmin
-    .from("app_settings")
-    .update({ general_passkey: passkey.trim() })
-    .eq("id", 1);
-  if (error) throw new Error("Could not update the General Admin passkey.");
+export async function setGeneralPasskey(db: Db, passkey: string) {
+  const { error } = await db.rpc("admin_set_general_passkey", { _passkey: passkey });
+  rpcError(error, "Could not update the General Admin passkey.");
 }
 
 /* ----------------------------------------------------------------- codes */
 
 export type ActiveCode = { code: string; expiresAt: string };
 
-/** Returns the live code for a session, rotating it automatically every 4 minutes. */
-export async function ensureActiveCode(sessionId: string): Promise<ActiveCode> {
-  const nowIso = new Date().toISOString();
-  const { data: existing } = await supabaseAdmin
-    .from("attendance_codes")
-    .select("code, expires_at")
-    .eq("session_id", sessionId)
-    .gt("expires_at", nowIso)
-    .order("expires_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (existing) return { code: existing.code, expiresAt: existing.expires_at };
-
-  const code = generateCode();
-  const expiresAt = new Date(Date.now() + CODE_TTL_MS).toISOString();
-  const { data: inserted, error } = await supabaseAdmin
-    .from("attendance_codes")
-    .insert({ session_id: sessionId, code, expires_at: expiresAt })
-    .select("code, expires_at")
-    .single();
-  if (error || !inserted) throw new Error("Could not generate an attendance code.");
-  return { code: inserted.code, expiresAt: inserted.expires_at };
+/** Live code for a session; the database rotates it every 4 minutes. */
+export async function ensureActiveCode(db: Db, sessionId: string): Promise<ActiveCode> {
+  const { data, error } = await db.rpc("ensure_active_code", { _session: sessionId });
+  rpcError(error, "Could not generate an attendance code.");
+  const res = (data ?? {}) as { code?: string; expiresAt?: string };
+  if (!res.code || !res.expiresAt) throw new Error("Could not generate an attendance code.");
+  return { code: res.code, expiresAt: res.expiresAt };
 }
 
 /* -------------------------------------------------------------- sessions */
 
 /** `null` sectionId targets the cross-department General session. */
-export async function getActiveSessionForSection(sectionId: string | null) {
-  let query = supabaseAdmin
+export async function getActiveSessionForSection(db: Db, sectionId: string | null) {
+  let query = db
     .from("attendance_sessions")
     .select("*")
     .eq("is_active", true)
@@ -243,28 +183,27 @@ export type StudentSession = {
 
 /** Sessions a student may mark: their own department plus any General session. */
 export async function listStudentSessions(
+  db: Db,
   studentSectionId: string | null,
 ): Promise<StudentSession[]> {
   const out: StudentSession[] = [];
 
-  const general = await getActiveSessionForSection(null);
-  if (general) out.push(await decorate(general, null, GENERAL_LABEL));
+  const general = await getActiveSessionForSection(db, null);
+  if (general) out.push(await decorate(db, general, null, GENERAL_LABEL));
 
   if (studentSectionId) {
-    const own = await getActiveSessionForSection(studentSectionId);
+    const own = await getActiveSessionForSection(db, studentSectionId);
     if (own) {
-      const { data: sec } = await supabaseAdmin
-        .from("sections")
-        .select("name")
-        .eq("id", studentSectionId)
-        .maybeSingle();
-      out.push(await decorate(own, studentSectionId, sec?.name ?? "My department"));
+      const sections = await listPublicSections(db);
+      const name = sections.find((s) => s.id === studentSectionId)?.name ?? "My department";
+      out.push(await decorate(db, own, studentSectionId, name));
     }
   }
   return out;
 }
 
 async function decorate(
+  db: Db,
   s: {
     id: string;
     course_name: string;
@@ -277,7 +216,7 @@ async function decorate(
   sectionId: string | null,
   sectionName: string,
 ): Promise<StudentSession> {
-  const code = await ensureActiveCode(s.id);
+  const code = await ensureActiveCode(db, s.id);
   return {
     id: s.id,
     course_name: s.course_name,
@@ -294,8 +233,7 @@ async function decorate(
 }
 
 export async function verifyAndMark(
-  userId: string,
-  studentSectionId: string | null,
+  db: Db,
   sessionId: string,
   fullName: string,
   code: string,
@@ -303,70 +241,29 @@ export async function verifyAndMark(
   lng: number,
   accuracy?: number,
 ) {
-  const { data: session } = await supabaseAdmin
-    .from("attendance_sessions")
-    .select("*")
-    .eq("id", sessionId)
-    .maybeSingle();
-
-  if (!session || !session.is_active) {
-    return { ok: false as const, reason: "That attendance session is no longer open." };
-  }
-  const eligible = session.section_id === null || session.section_id === studentSectionId;
-  if (!eligible) {
-    return { ok: false as const, reason: "This session belongs to another department." };
-  }
-
-  const nowIso = new Date().toISOString();
-  const { data: match } = await supabaseAdmin
-    .from("attendance_codes")
-    .select("id")
-    .eq("session_id", session.id)
-    .eq("code", code.trim().toUpperCase())
-    .gt("expires_at", nowIso)
-    .maybeSingle();
-
-  if (!match) {
-    return {
-      ok: false as const,
-      reason: "That code is invalid or has expired. Copy the latest code and try again.",
-    };
-  }
-
-  const distance = haversineMeters(session.lat, session.lng, lat, lng);
-  if (distance > session.radius_m) {
-    return {
-      ok: false as const,
-      reason: `You are ${Math.round(distance - session.radius_m)} meters outside the attendance area. Move closer to verify.`,
-      distance,
-    };
-  }
-
-  const name = fullName.trim().replace(/\s+/g, " ");
-  const { data: existing } = await supabaseAdmin
-    .from("attendance_records")
-    .select("id")
-    .eq("session_id", session.id)
-    .ilike("full_name", name)
-    .maybeSingle();
-
-  if (existing) {
-    return { ok: true as const, distance, already: true as const };
-  }
-
-  const { error } = await supabaseAdmin.from("attendance_records").insert({
-    session_id: session.id,
-    student_id: userId,
-    full_name: name,
-    lat,
-    lng,
-    distance_m: distance,
-    accuracy_m: typeof accuracy === "number" ? accuracy : null,
-    marked_at: new Date().toISOString(),
+  const { data, error } = await db.rpc("mark_attendance", {
+    _session: sessionId,
+    _full_name: fullName,
+    _code: code,
+    _lat: lat,
+    _lng: lng,
+    _accuracy: typeof accuracy === "number" ? accuracy : undefined,
   });
   if (error) return { ok: false as const, reason: "Could not save attendance. Try again." };
-
-  return { ok: true as const, distance, already: false as const };
+  const res = (data ?? {}) as {
+    ok?: boolean;
+    reason?: string;
+    distance?: number;
+    already?: boolean;
+  };
+  if (!res.ok) {
+    return {
+      ok: false as const,
+      reason: res.reason ?? "Could not save attendance. Try again.",
+      distance: res.distance,
+    };
+  }
+  return { ok: true as const, distance: res.distance ?? 0, already: !!res.already };
 }
 
 /* --------------------------------------------------------------- reports */
@@ -403,25 +300,21 @@ export type SessionSummary = {
   presentCount: number;
 };
 
-export async function buildReport(sessionId: string): Promise<Report> {
-  const { data: session } = await supabaseAdmin
+export async function buildReport(db: Db, sessionId: string): Promise<Report> {
+  const { data: session } = await db
     .from("attendance_sessions")
     .select("id, course_name, course_code, started_at, closed_at, radius_m, section_id")
     .eq("id", sessionId)
-    .single();
+    .maybeSingle();
   if (!session) throw new Error("Session not found.");
 
   let sectionName = GENERAL_LABEL;
   if (session.section_id) {
-    const { data: sec } = await supabaseAdmin
-      .from("sections")
-      .select("name")
-      .eq("id", session.section_id)
-      .maybeSingle();
-    sectionName = sec?.name ?? GENERAL_LABEL;
+    const sections = await listPublicSections(db);
+    sectionName = sections.find((s) => s.id === session.section_id)?.name ?? GENERAL_LABEL;
   }
 
-  const { data: records } = await supabaseAdmin
+  const { data: records } = await db
     .from("attendance_records")
     .select("full_name, marked_at")
     .eq("session_id", sessionId)
@@ -435,8 +328,8 @@ export async function buildReport(sessionId: string): Promise<Report> {
   return { session: sessionInfo, sectionName, rows, presentCount: rows.length };
 }
 
-export async function listSessionHistory(access: Access): Promise<SessionSummary[]> {
-  let query = supabaseAdmin
+export async function listSessionHistory(db: Db, access: Access): Promise<SessionSummary[]> {
+  let query = db
     .from("attendance_sessions")
     .select("id, course_name, course_code, started_at, closed_at, is_active, section_id")
     .order("started_at", { ascending: false })
@@ -448,10 +341,10 @@ export async function listSessionHistory(access: Access): Promise<SessionSummary
   const { data: sessions } = await query;
   if (!sessions?.length) return [];
 
-  const { data: sectionRows } = await supabaseAdmin.from("sections").select("id, name");
-  const names = new Map((sectionRows ?? []).map((s) => [s.id, s.name]));
+  const sectionRows = await listPublicSections(db);
+  const names = new Map(sectionRows.map((s) => [s.id, s.name]));
 
-  const { data: counts } = await supabaseAdmin
+  const { data: counts } = await db
     .from("attendance_records")
     .select("session_id")
     .in(
@@ -470,12 +363,7 @@ export async function listSessionHistory(access: Access): Promise<SessionSummary
   }));
 }
 
-export async function deleteSessionCompletely(sessionId: string) {
-  await supabaseAdmin.from("attendance_records").delete().eq("session_id", sessionId);
-  await supabaseAdmin.from("attendance_codes").delete().eq("session_id", sessionId);
-  const { error } = await supabaseAdmin
-    .from("attendance_sessions")
-    .delete()
-    .eq("id", sessionId);
-  if (error) throw new Error("Could not delete that report.");
+export async function deleteSessionCompletely(db: Db, sessionId: string) {
+  const { error } = await db.rpc("admin_delete_session", { _session: sessionId });
+  rpcError(error, "Could not delete that report.");
 }

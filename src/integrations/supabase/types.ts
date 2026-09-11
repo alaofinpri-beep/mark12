@@ -284,12 +284,71 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      admin_create_section: {
+        Args: { _name: string; _passkey: string }
+        Returns: Json
+      }
+      admin_delete_section: { Args: { _id: string }; Returns: Json }
+      admin_delete_session: { Args: { _session: string }; Returns: Json }
+      admin_general_passkey: { Args: never; Returns: string }
+      admin_list_sections: {
+        Args: never
+        Returns: {
+          created_at: string
+          id: string
+          is_disabled: boolean
+          name: string
+          passkey: string
+        }[]
+      }
+      admin_set_general_passkey: { Args: { _passkey: string }; Returns: Json }
+      admin_set_section_disabled: {
+        Args: { _disabled: boolean; _id: string }
+        Returns: Json
+      }
+      admin_update_section: {
+        Args: { _id: string; _name: string; _passkey: string }
+        Returns: Json
+      }
+      can_manage_section: {
+        Args: { _section: string; _uid: string }
+        Returns: boolean
+      }
+      can_manage_session: {
+        Args: { _session: string; _uid: string }
+        Returns: boolean
+      }
+      ensure_active_code: { Args: { _session: string }; Returns: Json }
       has_role: {
         Args: {
           _role: Database["public"]["Enums"]["app_role"]
           _user_id: string
         }
         Returns: boolean
+      }
+      is_general_admin: { Args: { _uid: string }; Returns: boolean }
+      list_departments: {
+        Args: never
+        Returns: {
+          id: string
+          name: string
+        }[]
+      }
+      mark_attendance: {
+        Args: {
+          _accuracy?: number
+          _code: string
+          _full_name: string
+          _lat: number
+          _lng: number
+          _session: string
+        }
+        Returns: Json
+      }
+      my_access: { Args: never; Returns: Json }
+      unlock_passkey: {
+        Args: { _passkey: string; _section?: string }
+        Returns: Json
       }
     }
     Enums: {
